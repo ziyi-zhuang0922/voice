@@ -15,6 +15,27 @@ const latencyHistory = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function request(path, options) { const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.'); return data; }
 function release() { stream?.getTracks().forEach(track => track.stop()); clearInterval(interval); }
+async function convertToWav(blob) {
+  if (blob.type.startsWith('audio/wav')) return blob;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error('This browser cannot prepare audio for ElevenLabs. Try Chrome or Safari.');
+  const context = new AudioContextClass();
+  try {
+    const source = await blob.arrayBuffer();
+    const audio = await context.decodeAudioData(source);
+    const channels = Math.min(audio.numberOfChannels, 2);
+    const frameCount = audio.length;
+    const output = new ArrayBuffer(44 + frameCount * channels * 2);
+    const view = new DataView(output);
+    view.setUint32(0, 0x52494646, false); view.setUint32(4, 36 + frameCount * channels * 2, true); view.setUint32(8, 0x57415645, false);
+    view.setUint32(12, 0x666d7420, false); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, channels, true);
+    view.setUint32(24, audio.sampleRate, true); view.setUint32(28, audio.sampleRate * channels * 2, true); view.setUint16(32, channels * 2, true); view.setUint16(34, 16, true);
+    view.setUint32(36, 0x64617461, false); view.setUint32(40, frameCount * channels * 2, true);
+    let offset = 44;
+    for (let frame = 0; frame < frameCount; frame += 1) for (let channel = 0; channel < channels; channel += 1) { const sample = Math.max(-1, Math.min(1, audio.getChannelData(channel)[frame])); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; }
+    return new Blob([output], { type: 'audio/wav' });
+  } finally { await context.close(); }
+}
 function setTranscript(value, target = provider) { transcripts.set(target, value); if (target === provider) { text.value = value; copy.disabled = !value.trim(); } }
 function recordLatency(target, stoppedAt) {
   const milliseconds = Math.max(0, Math.round(performance.now() - stoppedAt));
@@ -33,7 +54,7 @@ function selectProvider(next) {
 async function transcribe(blob, stoppedAt, target = provider) {
   busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[target].upload;
   try {
-    if (target !== 'assemblyai') { const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
+    if (target !== 'assemblyai') { let audio = blob; if (target === 'elevenLabs') { status.textContent = 'Preparing a compatible WAV for ElevenLabs…'; audio = await convertToWav(blob); } const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': audio.type }, body: audio }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
     const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); const deadline = Date.now() + 10 * 60 * 1000;
     while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
     throw new Error('Transcription timed out. Please try again later.');
