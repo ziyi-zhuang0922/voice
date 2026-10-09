@@ -9,7 +9,9 @@ async function run(t, options) {
 }
 test('serves workspace and exposes missing configuration without leaking keys', async t => {
   const base = await run(t, { apiKey: '', groqApiKey: '', elevenLabsApiKey: '', deepgramApiKey: '' });
-  assert.match(await (await fetch(base)).text(), /Speak your mind/);
+  const page = await fetch(base);
+  assert.match(await page.text(), /Speak your mind/);
+  assert.equal(page.headers.get('cache-control'), 'no-store');
   assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
 });

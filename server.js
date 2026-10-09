@@ -146,7 +146,7 @@ export function createServer({
       if (req.method !== 'GET' || !files[url.pathname]) return send(404, { error: 'Not found.' });
       const [file, type] = files[url.pathname];
       const body = await readFile(new URL(`./public/${file}`, import.meta.url));
-      res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'X-Content-Type-Options': 'nosniff' });
+      res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
       res.end(body);
     } catch (error) {
       if (!res.headersSent) send(502, { error: providerMessage(error?.status, error?.provider, error?.reason) });
