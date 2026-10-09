@@ -6,9 +6,10 @@ Minimal browser desktop workspace for recording audio and transcribing it with A
 
 Requires Node.js 22+; no third-party dependencies or install step.
 
-1. Set `ASSEMBLYAI_API_KEY` securely in your environment, or copy `.env.example` to the ignored `.env` and set the key locally. Never commit the key. The start command enables Node's environment-proxy support, which is required in this cloud environment.
-2. From `/workspace/voice`, run `npm start`.
-3. Open the local server on port 3000 in a supported desktop browser. Allow microphone permission, click the microphone to record, then click again to stop and transcribe. Recording stops automatically after five minutes.
+1. Clone the repository and enter it: `git clone https://github.com/ziyi-zhuang0922/voice.git && cd voice`.
+2. Copy the local configuration template: `cp .env.example .env`. Set `ASSEMBLYAI_API_KEY` in `.env`; never commit this file. The start command enables Node's environment-proxy support, which is required in the cloud environment and harmless locally.
+3. Run `npm start`.
+4. Open `http://127.0.0.1:3000` in a supported desktop browser. Allow microphone permission, click the microphone to record, then click again to stop and transcribe. Recording stops automatically after five minutes.
 
 Browser microphone access requires localhost or HTTPS. The local MVP has no user accounts or persistence. Audio is sent to AssemblyAI; provider retention and billing apply. The server does not save recordings to disk.
 
@@ -18,7 +19,7 @@ Outbound HTTPS access to `api.assemblyai.com` is required. Credentials stay on t
 
 Run `npm test`. Tests exercise upload, submission, model selection, polling, missing configuration, invalid input, cross-origin rejection, and provider failure through mocked provider responses. They do not verify microphone hardware or actual AssemblyAI recognition.
 
-Check `/api/health` for configured status. A complete live check requires a real API key and a browser microphone: record a short English phrase and confirm the returned transcript. The cloud onboarding run verified server behavior but had no key for live transcription.
+Check `/api/health` for configured status. A complete live check requires a real API key and a browser microphone: record a short English phrase and confirm the returned transcript. The cloud run has verified the real upload, submission, polling, and completion path using a valid silent WAV; a browser microphone check remains the final UI validation.
 
 ## Deploy
 
