@@ -8,7 +8,7 @@ async function run(t, options) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 test('serves workspace and exposes missing configuration without leaking keys', async t => {
-  const base = await run(t, { apiKey: '' });
+  const base = await run(t, { apiKey: '', groqApiKey: '' });
   assert.match(await (await fetch(base)).text(), /Speak your mind/);
   assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groq: { ready: false, model: 'whisper-large-v3-turbo' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
