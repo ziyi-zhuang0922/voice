@@ -4,73 +4,43 @@ const prompt = document.querySelector('#prompt');
 const text = document.querySelector('#text');
 const copy = document.querySelector('#copy');
 const timer = document.querySelector('#timer');
-let recorder, stream, interval, started, busy = false;
+const model = document.querySelector('#model');
+const tabs = [...document.querySelectorAll('.tab')];
+const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…' }, groq: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…' } };
+let provider = 'assemblyai', availability = {}, recorder, stream, interval, started, busy = false;
+const transcripts = new Map([['assemblyai', ''], ['groq', '']]);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function request(path, options) {
-  const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.');
-  return data;
-}
+async function request(path, options) { const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.'); return data; }
 function release() { stream?.getTracks().forEach(track => track.stop()); clearInterval(interval); }
+function setTranscript(value) { transcripts.set(provider, value); text.value = value; copy.disabled = !value.trim(); }
+function selectProvider(next) {
+  if (busy || recorder?.state === 'recording') return;
+  provider = next; model.textContent = providerInfo[provider].label;
+  tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
+  setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
+  status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${provider === 'groq' ? 'GROQ_API_KEY' : 'ASSEMBLYAI_API_KEY'} on the server and restart.`;
+}
 async function transcribe(blob) {
-  busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording';
-  status.textContent = 'Uploading securely to AssemblyAI…';
+  busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[provider].upload;
   try {
-    const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
-    const deadline = Date.now() + 10 * 60 * 1000;
-    while (Date.now() < deadline) {
-      const result = await request(`/api/transcripts/${job.id}`);
-      if (result.status === 'error') throw new Error(result.error);
-      if (result.status === 'completed') {
-        text.value = result.text || ''; copy.disabled = !text.value.trim();
-        status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.';
-        return;
-      }
-      status.textContent = 'Turning your speech into text…'; await delay(2000);
-    }
+    if (provider === 'groq') { const result = await request('/api/transcripts/groq', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); setTranscript(result.text || ''); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
+    const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); const deadline = Date.now() + 10 * 60 * 1000;
+    while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || ''); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
     throw new Error('Transcription timed out. Please try again later.');
-  } catch (error) { status.textContent = error.message; }
-  finally { busy = false; record.disabled = false; prompt.textContent = 'Ready when you are'; }
+  } catch (error) { status.textContent = error.message; } finally { busy = false; record.disabled = !availability[provider]; prompt.textContent = 'Ready when you are'; }
 }
 record.addEventListener('click', async () => {
-  if (busy) return;
-  if (recorder?.state === 'recording') { recorder.stop(); return; }
-  busy = true; record.disabled = true;
+  if (busy) return; if (recorder?.state === 'recording') { recorder.stop(); return; } busy = true; record.disabled = true;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type));
-    recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    const chunks = [];
-    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
-    recorder.onerror = () => { release(); status.textContent = 'Recording failed. Please retry.'; };
-    recorder.onstop = () => {
-      release(); record.classList.remove('recording'); record.setAttribute('aria-label', 'Start recording');
-      const blob = new Blob(chunks, { type: recorder.mimeType });
-      if (blob.size) void transcribe(blob);
-      else { status.textContent = 'Recording is empty. Please retry.'; }
-    };
-    recorder.start(1000); started = Date.now(); timer.textContent = '00:00';
-    interval = setInterval(() => {
-      const seconds = Math.floor((Date.now() - started) / 1000);
-      timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-      if (seconds >= 300 && recorder.state === 'recording') recorder.stop();
-    }, 250);
-    record.classList.add('recording'); record.setAttribute('aria-label', 'Stop recording');
-    prompt.textContent = 'Listening to you'; status.textContent = 'Click the microphone again to stop and transcribe.';
-  } catch (error) {
-    release(); status.textContent = error.name === 'NotAllowedError' ? 'Microphone access denied. Allow access in browser settings and retry.' : 'Could not access your microphone. Check your device and retry.';
-  } finally { busy = false; record.disabled = false; }
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type)); recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); const chunks = [];
+    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); }; recorder.onerror = () => { release(); status.textContent = 'Recording failed. Please retry.'; };
+    recorder.onstop = () => { release(); record.classList.remove('recording'); record.setAttribute('aria-label', 'Start recording'); const blob = new Blob(chunks, { type: recorder.mimeType }); if (blob.size) void transcribe(blob); else status.textContent = 'Recording is empty. Please retry.'; };
+    recorder.start(1000); started = Date.now(); timer.textContent = '00:00'; interval = setInterval(() => { const seconds = Math.floor((Date.now() - started) / 1000); timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; if (seconds >= 300 && recorder.state === 'recording') recorder.stop(); }, 250);
+    record.classList.add('recording'); record.setAttribute('aria-label', 'Stop recording'); prompt.textContent = 'Listening to you'; status.textContent = 'Click the microphone again to stop and transcribe.';
+  } catch (error) { release(); status.textContent = error.name === 'NotAllowedError' ? 'Microphone access denied. Allow access in browser settings and retry.' : 'Could not access your microphone. Check your device and retry.'; } finally { busy = false; record.disabled = !availability[provider]; }
 });
-text.addEventListener('input', () => { copy.disabled = !text.value.trim(); });
-copy.addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(text.value); status.textContent = 'Transcript copied.'; }
-  catch { status.textContent = 'Copy unavailable. Select the transcript and copy it manually.'; }
-});
+tabs.forEach(tab => tab.addEventListener('click', () => selectProvider(tab.dataset.provider)));
+text.addEventListener('input', () => { transcripts.set(provider, text.value); copy.disabled = !text.value.trim(); });
+copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text.value); status.textContent = 'Transcript copied.'; } catch { status.textContent = 'Copy unavailable. Select the transcript and copy it manually.'; } });
 window.addEventListener('pagehide', release);
-try {
-  const health = await request('/api/health');
-  if (!navigator.mediaDevices || !window.MediaRecorder) status.textContent = 'Recording requires a supported browser on localhost or HTTPS.';
-  else if (!health.ready) status.textContent = 'Setup needed: add ASSEMBLYAI_API_KEY on the server and restart.';
-  else { record.disabled = false; status.textContent = 'Click the microphone to start recording.'; }
-} catch { status.textContent = 'Could not connect to the server. Refresh to retry.'; }
+try { const health = await request('/api/health'); availability = Object.fromEntries(Object.entries(health.providers).map(([name, value]) => [name, value.ready])); if (!navigator.mediaDevices || !window.MediaRecorder) status.textContent = 'Recording requires a supported browser on localhost or HTTPS.'; else selectProvider(provider); } catch { status.textContent = 'Could not connect to the server. Refresh to retry.'; }

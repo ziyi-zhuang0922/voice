@@ -2,7 +2,8 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-const API = 'https://api.assemblyai.com/v2';
+const ASSEMBLY_API = 'https://api.assemblyai.com/v2';
+const GROQ_API = 'https://api.groq.com/openai/v1';
 const MAX_BYTES = 25 * 1024 * 1024;
 class SpeechProviderError extends Error {
   constructor(status) {
@@ -20,6 +21,7 @@ function providerMessage(status) {
 
 export function createServer({
   apiKey = process.env.ASSEMBLYAI_API_KEY,
+  groqApiKey = process.env.GROQ_API_KEY,
   basicAuthUser = process.env.APP_BASIC_AUTH_USER,
   basicAuthPassword = process.env.APP_BASIC_AUTH_PASSWORD,
   upstream = fetch,
@@ -29,10 +31,20 @@ export function createServer({
     throw new Error('Set both APP_BASIC_AUTH_USER and APP_BASIC_AUTH_PASSWORD to enable access protection.');
   }
   async function api(path, options = {}) {
-    const response = await upstream(`${API}${path}`, {
+    const response = await upstream(`${ASSEMBLY_API}${path}`, {
       ...options, headers: { authorization: apiKey, ...options.headers },
       signal: AbortSignal.timeout(60000),
     });
+    if (!response.ok) throw new SpeechProviderError(response.status);
+    return response.json();
+  }
+  async function groqTranscribe(audio, contentType) {
+    const form = new FormData();
+    const extension = contentType.includes('ogg') ? 'ogg' : contentType.includes('mp4') ? 'mp4' : contentType.includes('wav') ? 'wav' : 'webm';
+    form.set('file', new Blob([audio], { type: contentType }), `recording.${extension}`);
+    form.set('model', 'whisper-large-v3-turbo');
+    form.set('response_format', 'json');
+    const response = await upstream(`${GROQ_API}/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${groqApiKey}` }, body: form, signal: AbortSignal.timeout(60000) });
     if (!response.ok) throw new SpeechProviderError(response.status);
     return response.json();
   }
@@ -44,7 +56,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { ready: Boolean(apiKey), model: 'universal-2' });
+        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groq: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
@@ -57,6 +69,15 @@ export function createServer({
         // This MVP is local-only. Reject cross-origin browser requests.
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           req.resume(); return send(403, { error: 'Cross-origin requests are not allowed.' });
+        }
+        if (req.method === 'POST' && url.pathname === '/api/transcripts/groq') {
+          if (!groqApiKey) { req.resume(); return send(503, { error: 'Set GROQ_API_KEY on the server before transcribing with Groq.' }); }
+          if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }
+          const chunks = []; let size = 0;
+          for await (const chunk of req) { size += chunk.length; if (size > MAX_BYTES) { send(413, { error: 'Recording exceeds 25 MB.' }); req.resume(); return; } chunks.push(chunk); }
+          if (!size) return send(400, { error: 'Recording is empty.' });
+          const transcript = await groqTranscribe(Buffer.concat(chunks), req.headers['content-type']);
+          return send(200, { text: transcript.text || '' });
         }
         if (!apiKey) { req.resume(); return send(503, { error: 'Set ASSEMBLYAI_API_KEY on the server before transcribing.' }); }
         if (req.method === 'POST' && url.pathname === '/api/transcripts') {
