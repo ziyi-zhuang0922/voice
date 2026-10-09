@@ -38,11 +38,11 @@ export function createServer({
     if (!response.ok) throw new SpeechProviderError(response.status);
     return response.json();
   }
-  async function groqTranscribe(audio, contentType) {
+  async function groqTranscribe(audio, contentType, model) {
     const form = new FormData();
     const extension = contentType.includes('ogg') ? 'ogg' : contentType.includes('mp4') ? 'mp4' : contentType.includes('wav') ? 'wav' : 'webm';
     form.set('file', new Blob([audio], { type: contentType }), `recording.${extension}`);
-    form.set('model', 'whisper-large-v3-turbo');
+    form.set('model', model);
     form.set('response_format', 'json');
     const response = await upstream(`${GROQ_API}/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${groqApiKey}` }, body: form, signal: AbortSignal.timeout(60000) });
     if (!response.ok) throw new SpeechProviderError(response.status);
@@ -56,7 +56,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groq: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' } } });
+        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
@@ -70,13 +70,14 @@ export function createServer({
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           req.resume(); return send(403, { error: 'Cross-origin requests are not allowed.' });
         }
-        if (req.method === 'POST' && url.pathname === '/api/transcripts/groq') {
+        const groqModel = url.pathname === '/api/transcripts/groq' ? 'whisper-large-v3-turbo' : url.pathname === '/api/transcripts/groq/large-v3' ? 'whisper-large-v3' : null;
+        if (req.method === 'POST' && groqModel) {
           if (!groqApiKey) { req.resume(); return send(503, { error: 'Set GROQ_API_KEY on the server before transcribing with Groq.' }); }
           if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }
           const chunks = []; let size = 0;
           for await (const chunk of req) { size += chunk.length; if (size > MAX_BYTES) { send(413, { error: 'Recording exceeds 25 MB.' }); req.resume(); return; } chunks.push(chunk); }
           if (!size) return send(400, { error: 'Recording is empty.' });
-          const transcript = await groqTranscribe(Buffer.concat(chunks), req.headers['content-type']);
+          const transcript = await groqTranscribe(Buffer.concat(chunks), req.headers['content-type'], groqModel);
           return send(200, { text: transcript.text || '' });
         }
         if (!apiKey) { req.resume(); return send(503, { error: 'Set ASSEMBLYAI_API_KEY on the server before transcribing.' }); }

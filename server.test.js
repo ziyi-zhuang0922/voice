@@ -10,7 +10,7 @@ async function run(t, options) {
 test('serves workspace and exposes missing configuration without leaking keys', async t => {
   const base = await run(t, { apiKey: '', groqApiKey: '' });
   assert.match(await (await fetch(base)).text(), /Speak your mind/);
-  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groq: { ready: false, model: 'whisper-large-v3-turbo' } } });
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
 });
 test('uploads recorded audio, selects Universal-2 and returns completed transcript', async t => {
@@ -41,6 +41,16 @@ test('submits audio to Groq Whisper Large v3 Turbo and returns text directly', a
   const base = await run(t, { apiKey: '', groqApiKey: 'groq-key', upstream });
   const response = await fetch(`${base}/api/transcripts/groq`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
   assert.deepEqual(await response.json(), { text: 'Hello from Groq.' });
+});
+test('submits audio to Groq Whisper Large v3 and returns text directly', async t => {
+  const upstream = async (url, options) => {
+    assert.equal(url, 'https://api.groq.com/openai/v1/audio/transcriptions');
+    assert.equal(await options.body.get('model'), 'whisper-large-v3');
+    return Response.json({ text: 'Hello from Groq Large.' });
+  };
+  const base = await run(t, { apiKey: '', groqApiKey: 'groq-key', upstream });
+  const response = await fetch(`${base}/api/transcripts/groq/large-v3`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
+  assert.deepEqual(await response.json(), { text: 'Hello from Groq Large.' });
 });
 test('rejects invalid recordings and cross-origin requests before calling provider', async t => {
   const base = await run(t, { apiKey: 'test-key', upstream: () => { throw new Error('must not call'); } });

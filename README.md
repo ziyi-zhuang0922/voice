@@ -1,6 +1,6 @@
 # Voice workspace
 
-Minimal browser desktop workspace for recording audio and transcribing it with AssemblyAI Universal-2 or Groq Whisper Large v3 Turbo. Each model has its own tab and editable transcript. AssemblyAI is asynchronous after recording stops; Groq returns the transcription in the same request.
+Minimal browser desktop workspace for recording audio and transcribing it with AssemblyAI Universal-2, Groq Whisper Large v3 Turbo, or Groq Whisper Large v3. Each model has its own tab and editable transcript. AssemblyAI is asynchronous after recording stops; Groq returns the transcription in the same request.
 
 ## Run
 

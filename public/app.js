@@ -8,9 +8,9 @@ const model = document.querySelector('#model');
 const tabs = [...document.querySelectorAll('.tab')];
 const latencyList = document.querySelector('#latency-list');
 const latencyEmpty = document.querySelector('#latency-empty');
-const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…' }, groq: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…' } };
+const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' } };
 let provider = 'assemblyai', availability = {}, recorder, stream, interval, started, busy = false;
-const transcripts = new Map([['assemblyai', ''], ['groq', '']]);
+const transcripts = new Map([['assemblyai', ''], ['groqTurbo', ''], ['groqLarge', '']]);
 const latencyHistory = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function request(path, options) { const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.'); return data; }
@@ -20,19 +20,19 @@ function recordLatency(target, stoppedAt) {
   const milliseconds = Math.max(0, Math.round(performance.now() - stoppedAt));
   latencyHistory.unshift({ target, milliseconds }); latencyHistory.splice(5);
   latencyEmpty.hidden = latencyHistory.length > 0;
-  latencyList.innerHTML = latencyHistory.map(({ target: itemProvider, milliseconds: itemMilliseconds }) => `<li class="latency-item"><span class="latency-meta">${itemProvider === 'groq' ? 'Groq' : 'AssemblyAI'}<small>${itemProvider === 'groq' ? 'Whisper Large v3 Turbo' : 'Universal-2'}</small></span><strong>${(itemMilliseconds / 1000).toFixed(2)}s</strong></li>`).join('');
+  latencyList.innerHTML = latencyHistory.map(({ target: itemProvider, milliseconds: itemMilliseconds }) => `<li class="latency-item"><span class="latency-meta">${itemProvider.startsWith('groq') ? 'Groq' : 'AssemblyAI'}<small>${providerInfo[itemProvider].name || 'Universal-2'}</small></span><strong>${(itemMilliseconds / 1000).toFixed(2)}s</strong></li>`).join('');
 }
 function selectProvider(next) {
   if (busy || recorder?.state === 'recording') return;
   provider = next; model.textContent = providerInfo[provider].label;
   tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
-  status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${provider === 'groq' ? 'GROQ_API_KEY' : 'ASSEMBLYAI_API_KEY'} on the server and restart.`;
+  status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${provider.startsWith('groq') ? 'GROQ_API_KEY' : 'ASSEMBLYAI_API_KEY'} on the server and restart.`;
 }
 async function transcribe(blob, stoppedAt, target = provider) {
   busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[target].upload;
   try {
-    if (target === 'groq') { const result = await request('/api/transcripts/groq', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
+    if (target.startsWith('groq')) { const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
     const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); const deadline = Date.now() + 10 * 60 * 1000;
     while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
     throw new Error('Transcription timed out. Please try again later.');
