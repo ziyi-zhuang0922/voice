@@ -85,7 +85,7 @@ test('handles provider failure without leaking provider response or secret', asy
   const response = await fetch(`${base}/api/transcripts`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'audio' });
   assert.equal(response.status, 502);
   const body = await response.text();
-  assert.match(body, /rejected the API key or account access/);
+  assert.match(body, /AssemblyAI rejected the API key or account access/);
   assert.doesNotMatch(body, /private-key/);
 });
 

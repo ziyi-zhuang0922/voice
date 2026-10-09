@@ -6,17 +6,18 @@ const ASSEMBLY_API = 'https://api.assemblyai.com/v2';
 const GROQ_API = 'https://api.groq.com/openai/v1';
 const MAX_BYTES = 25 * 1024 * 1024;
 class SpeechProviderError extends Error {
-  constructor(status) {
-    super(`Speech provider request failed (${status}).`);
+  constructor(status, provider) {
+    super(`${provider} request failed (${status}).`);
     this.status = status;
+    this.provider = provider;
   }
 }
 
-function providerMessage(status) {
-  if (status === 400 || status === 415) return 'AssemblyAI could not process this recording. Try recording again.';
-  if (status === 401 || status === 403) return 'AssemblyAI rejected the API key or account access.';
-  if (status === 402 || status === 429) return 'AssemblyAI account quota or rate limit reached. Check your AssemblyAI account.';
-  return 'Speech service unavailable. Check your connection, then retry.';
+function providerMessage(status, provider = 'Speech service') {
+  if (status === 400 || status === 415) return `${provider} could not process this recording. Try recording again.`;
+  if (status === 401 || status === 403) return `${provider} rejected the API key or account access.`;
+  if (status === 402 || status === 429) return `${provider} account quota or rate limit reached. Check your ${provider} account.`;
+  return `${provider} is unavailable. Check your connection, then retry.`;
 }
 
 export function createServer({
@@ -37,7 +38,7 @@ export function createServer({
       ...options, headers: { authorization: apiKey, ...options.headers },
       signal: AbortSignal.timeout(60000),
     });
-    if (!response.ok) throw new SpeechProviderError(response.status);
+    if (!response.ok) throw new SpeechProviderError(response.status, 'AssemblyAI');
     return response.json();
   }
   async function groqTranscribe(audio, contentType, model) {
@@ -47,7 +48,7 @@ export function createServer({
     form.set('model', model);
     form.set('response_format', 'json');
     const response = await upstream(`${GROQ_API}/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${groqApiKey}` }, body: form, signal: AbortSignal.timeout(60000) });
-    if (!response.ok) throw new SpeechProviderError(response.status);
+    if (!response.ok) throw new SpeechProviderError(response.status, 'Groq');
     return response.json();
   }
   async function elevenLabsTranscribe(audio, contentType) {
@@ -56,12 +57,12 @@ export function createServer({
     form.set('file', new Blob([audio], { type: contentType }), `recording.${extension}`);
     form.set('model_id', 'scribe_v2');
     const response = await upstream('https://api.elevenlabs.io/v1/speech-to-text', { method: 'POST', headers: { 'xi-api-key': elevenLabsApiKey }, body: form, signal: AbortSignal.timeout(60000) });
-    if (!response.ok) throw new SpeechProviderError(response.status);
+    if (!response.ok) throw new SpeechProviderError(response.status, 'ElevenLabs');
     return response.json();
   }
   async function deepgramTranscribe(audio, contentType) {
     const response = await upstream('https://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true', { method: 'POST', headers: { authorization: `Token ${deepgramApiKey}`, 'content-type': contentType }, body: audio, signal: AbortSignal.timeout(60000) });
-    if (!response.ok) throw new SpeechProviderError(response.status);
+    if (!response.ok) throw new SpeechProviderError(response.status, 'Deepgram');
     return response.json();
   }
   return http.createServer(async (req, res) => {
@@ -137,7 +138,7 @@ export function createServer({
       res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'X-Content-Type-Options': 'nosniff' });
       res.end(body);
     } catch (error) {
-      if (!res.headersSent) send(502, { error: providerMessage(error?.status) });
+      if (!res.headersSent) send(502, { error: providerMessage(error?.status, error?.provider) });
       else res.end();
     }
   });
