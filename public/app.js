@@ -6,13 +6,22 @@ const copy = document.querySelector('#copy');
 const timer = document.querySelector('#timer');
 const model = document.querySelector('#model');
 const tabs = [...document.querySelectorAll('.tab')];
+const latencyList = document.querySelector('#latency-list');
+const latencyEmpty = document.querySelector('#latency-empty');
 const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…' }, groq: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…' } };
 let provider = 'assemblyai', availability = {}, recorder, stream, interval, started, busy = false;
 const transcripts = new Map([['assemblyai', ''], ['groq', '']]);
+const latencyHistory = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function request(path, options) { const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.'); return data; }
 function release() { stream?.getTracks().forEach(track => track.stop()); clearInterval(interval); }
-function setTranscript(value) { transcripts.set(provider, value); text.value = value; copy.disabled = !value.trim(); }
+function setTranscript(value, target = provider) { transcripts.set(target, value); if (target === provider) { text.value = value; copy.disabled = !value.trim(); } }
+function recordLatency(target, stoppedAt) {
+  const milliseconds = Math.max(0, Math.round(performance.now() - stoppedAt));
+  latencyHistory.unshift({ target, milliseconds }); latencyHistory.splice(5);
+  latencyEmpty.hidden = latencyHistory.length > 0;
+  latencyList.innerHTML = latencyHistory.map(({ target: itemProvider, milliseconds: itemMilliseconds }) => `<li class="latency-item"><span class="latency-meta">${itemProvider === 'groq' ? 'Groq' : 'AssemblyAI'}<small>${itemProvider === 'groq' ? 'Whisper Large v3 Turbo' : 'Universal-2'}</small></span><strong>${(itemMilliseconds / 1000).toFixed(2)}s</strong></li>`).join('');
+}
 function selectProvider(next) {
   if (busy || recorder?.state === 'recording') return;
   provider = next; model.textContent = providerInfo[provider].label;
@@ -20,12 +29,12 @@ function selectProvider(next) {
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
   status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${provider === 'groq' ? 'GROQ_API_KEY' : 'ASSEMBLYAI_API_KEY'} on the server and restart.`;
 }
-async function transcribe(blob) {
-  busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[provider].upload;
+async function transcribe(blob, stoppedAt, target = provider) {
+  busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[target].upload;
   try {
-    if (provider === 'groq') { const result = await request('/api/transcripts/groq', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); setTranscript(result.text || ''); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
+    if (target === 'groq') { const result = await request('/api/transcripts/groq', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
     const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); const deadline = Date.now() + 10 * 60 * 1000;
-    while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || ''); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
+    while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
     throw new Error('Transcription timed out. Please try again later.');
   } catch (error) { status.textContent = error.message; } finally { busy = false; record.disabled = !availability[provider]; prompt.textContent = 'Ready when you are'; }
 }
@@ -34,7 +43,7 @@ record.addEventListener('click', async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type)); recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); const chunks = [];
     recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); }; recorder.onerror = () => { release(); status.textContent = 'Recording failed. Please retry.'; };
-    recorder.onstop = () => { release(); record.classList.remove('recording'); record.setAttribute('aria-label', 'Start recording'); const blob = new Blob(chunks, { type: recorder.mimeType }); if (blob.size) void transcribe(blob); else status.textContent = 'Recording is empty. Please retry.'; };
+    recorder.onstop = () => { const stoppedAt = performance.now(); const target = provider; release(); record.classList.remove('recording'); record.setAttribute('aria-label', 'Start recording'); const blob = new Blob(chunks, { type: recorder.mimeType }); if (blob.size) void transcribe(blob, stoppedAt, target); else status.textContent = 'Recording is empty. Please retry.'; };
     recorder.start(1000); started = Date.now(); timer.textContent = '00:00'; interval = setInterval(() => { const seconds = Math.floor((Date.now() - started) / 1000); timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; if (seconds >= 300 && recorder.state === 'recording') recorder.stop(); }, 250);
     record.classList.add('recording'); record.setAttribute('aria-label', 'Stop recording'); prompt.textContent = 'Listening to you'; status.textContent = 'Click the microphone again to stop and transcribe.';
   } catch (error) { release(); status.textContent = error.name === 'NotAllowedError' ? 'Microphone access denied. Allow access in browser settings and retry.' : 'Could not access your microphone. Check your device and retry.'; } finally { busy = false; record.disabled = !availability[provider]; }
