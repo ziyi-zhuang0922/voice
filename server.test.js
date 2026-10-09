@@ -39,7 +39,9 @@ test('handles provider failure without leaking provider response or secret', asy
   const base = await run(t, { apiKey: 'private-key', upstream: async () => new Response('private-key', { status: 401 }) });
   const response = await fetch(`${base}/api/transcripts`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'audio' });
   assert.equal(response.status, 502);
-  assert.doesNotMatch(await response.text(), /private-key/);
+  const body = await response.text();
+  assert.match(body, /rejected the API key or account access/);
+  assert.doesNotMatch(body, /private-key/);
 });
 
 test('protects the workspace when basic authentication is configured', async t => {

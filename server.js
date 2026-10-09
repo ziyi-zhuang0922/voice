@@ -4,6 +4,20 @@ import { pathToFileURL } from 'node:url';
 
 const API = 'https://api.assemblyai.com/v2';
 const MAX_BYTES = 25 * 1024 * 1024;
+class SpeechProviderError extends Error {
+  constructor(status) {
+    super(`Speech provider request failed (${status}).`);
+    this.status = status;
+  }
+}
+
+function providerMessage(status) {
+  if (status === 400 || status === 415) return 'AssemblyAI could not process this recording. Try recording again.';
+  if (status === 401 || status === 403) return 'AssemblyAI rejected the API key or account access.';
+  if (status === 402 || status === 429) return 'AssemblyAI account quota or rate limit reached. Check your AssemblyAI account.';
+  return 'Speech service unavailable. Check your connection, then retry.';
+}
+
 export function createServer({
   apiKey = process.env.ASSEMBLYAI_API_KEY,
   basicAuthUser = process.env.APP_BASIC_AUTH_USER,
@@ -19,7 +33,7 @@ export function createServer({
       ...options, headers: { authorization: apiKey, ...options.headers },
       signal: AbortSignal.timeout(60000),
     });
-    if (!response.ok) throw new Error(`Speech provider request failed (${response.status}).`);
+    if (!response.ok) throw new SpeechProviderError(response.status);
     return response.json();
   }
   return http.createServer(async (req, res) => {
@@ -73,8 +87,8 @@ export function createServer({
       const body = await readFile(new URL(`./public/${file}`, import.meta.url));
       res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'X-Content-Type-Options': 'nosniff' });
       res.end(body);
-    } catch {
-      if (!res.headersSent) send(502, { error: 'Speech service unavailable. Check your API key and connection, then retry.' });
+    } catch (error) {
+      if (!res.headersSent) send(502, { error: providerMessage(error?.status) });
       else res.end();
     }
   });
