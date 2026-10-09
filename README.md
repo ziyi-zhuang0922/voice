@@ -1,13 +1,13 @@
 # Voice workspace
 
-Minimal browser desktop workspace for recording audio and transcribing it with AssemblyAI Universal-2, Groq Whisper Large v3 Turbo, or Groq Whisper Large v3. Each model has its own tab and editable transcript. AssemblyAI is asynchronous after recording stops; Groq returns the transcription in the same request.
+Minimal browser desktop workspace for recording audio and transcribing it with AssemblyAI Universal-2, Groq Whisper Large v3 Turbo, Groq Whisper Large v3, ElevenLabs Scribe v2, or Deepgram Nova-3 (English single-language mode). Each model has its own tab and editable transcript. AssemblyAI is asynchronous after recording stops; the other providers return the transcription in the same request.
 
 ## Run
 
 Requires Node.js 22+; no third-party dependencies or install step.
 
 1. Clone the repository and enter it: `git clone https://github.com/ziyi-zhuang0922/voice.git && cd voice`.
-2. Copy the local configuration template: `cp .env.example .env`. Set `ASSEMBLYAI_API_KEY` and/or `GROQ_API_KEY` in `.env`; never commit this file. The start command enables Node's environment-proxy support, which is required in the cloud environment and harmless locally.
+2. Copy the local configuration template: `cp .env.example .env`. Set the provider keys you need (`ASSEMBLYAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY`, or `DEEPGRAM_API_KEY`) in `.env`; never commit this file. The start command enables Node's environment-proxy support, which is required in the cloud environment and harmless locally.
 3. Run `npm start`.
 4. Open `http://127.0.0.1:3000` in a supported desktop browser. Allow microphone permission, click the microphone to record, then click again to stop and transcribe. Recording stops automatically after five minutes.
 

@@ -22,6 +22,8 @@ function providerMessage(status) {
 export function createServer({
   apiKey = process.env.ASSEMBLYAI_API_KEY,
   groqApiKey = process.env.GROQ_API_KEY,
+  elevenLabsApiKey = process.env.ELEVENLABS_API_KEY,
+  deepgramApiKey = process.env.DEEPGRAM_API_KEY,
   basicAuthUser = process.env.APP_BASIC_AUTH_USER,
   basicAuthPassword = process.env.APP_BASIC_AUTH_PASSWORD,
   upstream = fetch,
@@ -48,6 +50,20 @@ export function createServer({
     if (!response.ok) throw new SpeechProviderError(response.status);
     return response.json();
   }
+  async function elevenLabsTranscribe(audio, contentType) {
+    const form = new FormData();
+    const extension = contentType.includes('ogg') ? 'ogg' : contentType.includes('mp4') ? 'mp4' : contentType.includes('wav') ? 'wav' : 'webm';
+    form.set('file', new Blob([audio], { type: contentType }), `recording.${extension}`);
+    form.set('model_id', 'scribe_v2');
+    const response = await upstream('https://api.elevenlabs.io/v1/speech-to-text', { method: 'POST', headers: { 'xi-api-key': elevenLabsApiKey }, body: form, signal: AbortSignal.timeout(60000) });
+    if (!response.ok) throw new SpeechProviderError(response.status);
+    return response.json();
+  }
+  async function deepgramTranscribe(audio, contentType) {
+    const response = await upstream('https://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true', { method: 'POST', headers: { authorization: `Token ${deepgramApiKey}`, 'content-type': contentType }, body: audio, signal: AbortSignal.timeout(60000) });
+    if (!response.ok) throw new SpeechProviderError(response.status);
+    return response.json();
+  }
   return http.createServer(async (req, res) => {
     const send = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -56,7 +72,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' } } });
+        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
@@ -69,6 +85,17 @@ export function createServer({
         // This MVP is local-only. Reject cross-origin browser requests.
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           req.resume(); return send(403, { error: 'Cross-origin requests are not allowed.' });
+        }
+        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : null;
+        if (req.method === 'POST' && directProvider) {
+          if (!directProvider.key) { req.resume(); return send(503, { error: `Set ${directProvider.name} on the server before transcribing.` }); }
+          if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }
+          const chunks = []; let size = 0;
+          for await (const chunk of req) { size += chunk.length; if (size > MAX_BYTES) { send(413, { error: 'Recording exceeds 25 MB.' }); req.resume(); return; } chunks.push(chunk); }
+          if (!size) return send(400, { error: 'Recording is empty.' });
+          const transcript = await directProvider.transcribe(Buffer.concat(chunks), req.headers['content-type']);
+          const transcriptText = transcript.text || transcript.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+          return send(200, { text: transcriptText });
         }
         const groqModel = url.pathname === '/api/transcripts/groq' ? 'whisper-large-v3-turbo' : url.pathname === '/api/transcripts/groq/large-v3' ? 'whisper-large-v3' : null;
         if (req.method === 'POST' && groqModel) {

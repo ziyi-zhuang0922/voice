@@ -8,9 +8,9 @@ async function run(t, options) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 test('serves workspace and exposes missing configuration without leaking keys', async t => {
-  const base = await run(t, { apiKey: '', groqApiKey: '' });
+  const base = await run(t, { apiKey: '', groqApiKey: '', elevenLabsApiKey: '', deepgramApiKey: '' });
   assert.match(await (await fetch(base)).text(), /Speak your mind/);
-  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' } } });
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
 });
 test('uploads recorded audio, selects Universal-2 and returns completed transcript', async t => {
@@ -51,6 +51,28 @@ test('submits audio to Groq Whisper Large v3 and returns text directly', async t
   const base = await run(t, { apiKey: '', groqApiKey: 'groq-key', upstream });
   const response = await fetch(`${base}/api/transcripts/groq/large-v3`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
   assert.deepEqual(await response.json(), { text: 'Hello from Groq Large.' });
+});
+test('submits audio to ElevenLabs Scribe v2 and returns text directly', async t => {
+  const upstream = async (url, options) => {
+    assert.equal(url, 'https://api.elevenlabs.io/v1/speech-to-text');
+    assert.equal(options.headers['xi-api-key'], 'eleven-key');
+    assert.equal(await options.body.get('model_id'), 'scribe_v2');
+    return Response.json({ text: 'Hello from ElevenLabs.' });
+  };
+  const base = await run(t, { apiKey: '', groqApiKey: '', elevenLabsApiKey: 'eleven-key', upstream });
+  const response = await fetch(`${base}/api/transcripts/elevenlabs`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
+  assert.deepEqual(await response.json(), { text: 'Hello from ElevenLabs.' });
+});
+test('submits audio to Deepgram Nova-3 with English single-language mode', async t => {
+  const upstream = async (url, options) => {
+    assert.equal(url, 'https://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true');
+    assert.equal(options.headers.authorization, 'Token deepgram-key');
+    assert.equal(options.headers['content-type'], 'audio/webm');
+    return Response.json({ results: { channels: [{ alternatives: [{ transcript: 'Hello from Deepgram.' }] }] } });
+  };
+  const base = await run(t, { apiKey: '', groqApiKey: '', deepgramApiKey: 'deepgram-key', upstream });
+  const response = await fetch(`${base}/api/transcripts/deepgram`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
+  assert.deepEqual(await response.json(), { text: 'Hello from Deepgram.' });
 });
 test('rejects invalid recordings and cross-origin requests before calling provider', async t => {
   const base = await run(t, { apiKey: 'test-key', upstream: () => { throw new Error('must not call'); } });
