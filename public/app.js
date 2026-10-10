@@ -8,10 +8,11 @@ const model = document.querySelector('#model');
 const tabs = [...document.querySelectorAll('.tab')];
 const latencyList = document.querySelector('#latency-list');
 const latencyEmpty = document.querySelector('#latency-empty');
-const REQUIRED_HEALTH_SCHEMA_VERSION = 2;
-const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' }, openai: { label: 'OPENAI · GPT-4O MINI TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai', name: 'gpt-4o-mini-transcribe' }, openai4o: { label: 'OPENAI · GPT-4O TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-4o-transcribe', name: 'gpt-4o-transcribe' }, openaiLive: { label: 'OPENAI · GPT-LIVE-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-live-transcribe', name: 'gpt-live-transcribe' }, openaiTranscribe: { label: 'OPENAI · GPT-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-transcribe', name: 'gpt-transcribe' } };
+const REQUIRED_HEALTH_SCHEMA_VERSION = 3;
+const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' }, openai: { label: 'OPENAI · GPT-4O MINI TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai', name: 'gpt-4o-mini-transcribe' }, openai4o: { label: 'OPENAI · GPT-4O TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-4o-transcribe', name: 'gpt-4o-transcribe' }, openaiLive: { label: 'OPENAI · GPT-LIVE-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-live-transcribe', name: 'gpt-live-transcribe' }, openaiTranscribe: { label: 'OPENAI · GPT-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-transcribe', name: 'gpt-transcribe' }, gemini: { label: 'GEMINI · 3.5 TRANSCRIBE', upload: 'Uploading securely to Gemini…', endpoint: '/api/transcripts/gemini', name: 'gemini-3.5-transcribe' }, geminiLive: { label: 'GEMINI · 3.5 TRANSCRIBE LIVE', upload: 'Connecting securely to Gemini…', name: 'gemini-3.5-transcribe-live' } };
 let provider = 'assemblyai', availability = {}, serverSchemaCurrent = true, recorder, stream, interval, started, busy = false;
 let livePeer, liveChannel, liveTranscript = '', liveStoppedAt, liveTimeout;
+let geminiSocket, geminiAudioContext, geminiSource, geminiProcessor, geminiFinalTranscript = '', geminiInterimTranscript = '', geminiStoppedAt, geminiTimeout;
 const transcripts = new Map(Object.keys(providerInfo).map(name => [name, '']));
 const latencyHistory = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -20,7 +21,11 @@ function release() {
   stream?.getTracks().forEach(track => track.stop());
   clearInterval(interval); clearTimeout(liveTimeout);
   liveChannel?.close(); livePeer?.close();
+  if (geminiProcessor) { geminiProcessor.onaudioprocess = null; geminiProcessor.disconnect(); }
+  geminiSource?.disconnect(); geminiAudioContext?.close().catch(() => {});
+  geminiSocket?.close(); clearTimeout(geminiTimeout);
   stream = undefined; liveChannel = undefined; livePeer = undefined;
+  geminiSocket = undefined; geminiAudioContext = undefined; geminiSource = undefined; geminiProcessor = undefined;
 }
 async function convertToWav(blob) {
   if (blob.type.startsWith('audio/wav')) return blob;
@@ -51,12 +56,12 @@ function recordLatency(target, stoppedAt) {
   latencyList.innerHTML = latencyHistory.map(({ target: itemProvider, milliseconds: itemMilliseconds }) => `<li class="latency-item"><span class="latency-meta">${providerInfo[itemProvider].label.split(' · ')[0]}<small>${providerInfo[itemProvider].name}</small></span><strong>${(itemMilliseconds / 1000).toFixed(2)}s</strong></li>`).join('');
 }
 function selectProvider(next) {
-  if (busy || recorder?.state === 'recording' || livePeer) return;
+  if (busy || recorder?.state === 'recording' || livePeer || geminiSocket) return;
   provider = next; model.textContent = providerInfo[provider].label;
   tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
   if (!serverSchemaCurrent || !(provider in availability)) { record.disabled = true; status.textContent = 'Server update detected. Stop the old process and restart npm start.'; return; }
-  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider.startsWith('openai') ? 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)' : 'ASSEMBLYAI_API_KEY';
+  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider.startsWith('openai') ? 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)' : provider.startsWith('gemini') ? 'GEMINI_API_KEY (or GOOGLE_API_KEY)' : 'ASSEMBLYAI_API_KEY';
   status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${keyName} on the server and restart.`;
 }
 function finishLiveTranscription(message, transcript = liveTranscript) {
@@ -109,6 +114,87 @@ function stopLiveTranscription() {
   prompt.textContent = 'Transcribing your recording'; status.textContent = 'Finalizing the live transcript…';
   liveTimeout = setTimeout(() => finishLiveTranscription('OpenAI live transcription timed out. Please retry.'), 90000);
 }
+function floatAudioToBase64Pcm16(samples, inputRate) {
+  const ratio = inputRate / 16000;
+  const outputLength = Math.floor(samples.length / ratio);
+  const pcm = new Int16Array(outputLength);
+  for (let index = 0; index < outputLength; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.max(start + 1, Math.min(samples.length, Math.floor((index + 1) * ratio)));
+    let total = 0;
+    for (let inputIndex = start; inputIndex < end; inputIndex += 1) total += samples[inputIndex];
+    const sample = Math.max(-1, Math.min(1, total / (end - start)));
+    pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+}
+function finishGeminiLiveTranscription(message) {
+  const transcript = geminiFinalTranscript.trim();
+  if (transcript) { setTranscript(transcript, 'geminiLive'); if (geminiStoppedAt) recordLatency('geminiLive', geminiStoppedAt); }
+  release(); busy = false; geminiFinalTranscript = ''; geminiInterimTranscript = ''; geminiStoppedAt = undefined;
+  record.classList.remove('recording'); record.setAttribute('aria-label', 'Start recording');
+  record.disabled = !availability[provider]; prompt.textContent = 'Ready when you are'; status.textContent = message;
+}
+function updateGeminiTranscript() {
+  setTranscript([geminiFinalTranscript, geminiInterimTranscript].filter(Boolean).join(' ').trim(), 'geminiLive');
+}
+async function startGeminiLiveTranscription() {
+  busy = true; record.disabled = true; geminiFinalTranscript = ''; geminiInterimTranscript = ''; setTranscript('', 'geminiLive');
+  try {
+    const { token } = await request('/api/transcripts/gemini/live/token', { method: 'POST' });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    const socket = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token)}`);
+    geminiSocket = socket;
+    const ready = new Promise((resolve, reject) => {
+      socket.addEventListener('open', () => socket.send(JSON.stringify({ setup: { model: 'models/gemini-3.5-transcribe-live', generationConfig: { responseModalities: ['TEXT'] }, inputAudioTranscription: { languageCodes: [] } } })), { once: true });
+      socket.addEventListener('error', () => reject(new Error('Could not open the Gemini live transcription channel.')), { once: true });
+      socket.addEventListener('message', event => {
+        const data = JSON.parse(event.data);
+        if (data.setupComplete) resolve();
+        const content = data.serverContent || data.server_content;
+        if (!content) return;
+        const interim = content.interimInputTranscription || content.interim_input_transcription;
+        const final = content.inputTranscription || content.input_transcription;
+        if (interim?.text) { geminiInterimTranscript = interim.text; updateGeminiTranscript(); }
+        if (final?.text) {
+          geminiFinalTranscript = [geminiFinalTranscript, final.text].filter(Boolean).join(' ').trim();
+          geminiInterimTranscript = ''; updateGeminiTranscript();
+          if (geminiStoppedAt) { clearTimeout(geminiTimeout); geminiTimeout = setTimeout(() => finishGeminiLiveTranscription('Transcript ready. Edit or copy your text below.'), 750); }
+        }
+        if ((content.turnComplete || content.turn_complete) && geminiStoppedAt) finishGeminiLiveTranscription(geminiFinalTranscript ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.');
+      });
+      socket.addEventListener('close', () => { if (geminiSocket === socket) finishGeminiLiveTranscription(geminiFinalTranscript ? 'Transcript ready. Edit or copy your text below.' : 'Gemini live transcription disconnected. Please retry.'); reject(new Error('Gemini live transcription disconnected. Please retry.')); });
+    });
+    await Promise.race([ready, delay(15000).then(() => { throw new Error('Gemini live transcription connection timed out.'); })]);
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error('This browser cannot stream PCM audio. Try Chrome or Safari.');
+    geminiAudioContext = new AudioContextClass();
+    geminiSource = geminiAudioContext.createMediaStreamSource(stream);
+    geminiProcessor = geminiAudioContext.createScriptProcessor(4096, 1, 1);
+    geminiProcessor.onaudioprocess = event => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      const data = floatAudioToBase64Pcm16(event.inputBuffer.getChannelData(0), geminiAudioContext.sampleRate);
+      socket.send(JSON.stringify({ realtimeInput: { audio: { data, mimeType: 'audio/pcm;rate=16000' } } }));
+    };
+    geminiSource.connect(geminiProcessor); geminiProcessor.connect(geminiAudioContext.destination);
+    started = Date.now(); timer.textContent = '00:00';
+    interval = setInterval(() => { const seconds = Math.floor((Date.now() - started) / 1000); timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; if (seconds >= 300 && geminiSocket) stopGeminiLiveTranscription(); }, 250);
+    record.classList.add('recording'); record.setAttribute('aria-label', 'Stop recording');
+    prompt.textContent = 'Listening to you'; status.textContent = 'Gemini live speech-to-text is active. Click the microphone to finish.';
+  } catch (error) {
+    release(); status.textContent = error.name === 'NotAllowedError' ? 'Microphone access denied. Allow access in browser settings and retry.' : error.message;
+  } finally { busy = false; record.disabled = !availability[provider]; }
+}
+function stopGeminiLiveTranscription() {
+  if (!geminiSocket || geminiSocket.readyState !== WebSocket.OPEN) return;
+  busy = true; geminiStoppedAt = performance.now();
+  geminiProcessor.onaudioprocess = null; geminiProcessor.disconnect(); geminiSource.disconnect();
+  stream?.getTracks().forEach(track => track.stop()); clearInterval(interval);
+  geminiSocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+  record.classList.remove('recording'); record.disabled = true; record.setAttribute('aria-label', 'Start recording');
+  prompt.textContent = 'Transcribing your recording'; status.textContent = 'Finalizing the Gemini live transcript…';
+  geminiTimeout = setTimeout(() => finishGeminiLiveTranscription(geminiFinalTranscript ? 'Transcript ready. Edit or copy your text below.' : 'Gemini live transcription timed out. Please retry.'), 90000);
+}
 async function transcribe(blob, stoppedAt, target = provider) {
   busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[target].upload;
   try {
@@ -121,6 +207,7 @@ async function transcribe(blob, stoppedAt, target = provider) {
 record.addEventListener('click', async () => {
   if (busy) return;
   if (provider === 'openaiLive') { if (livePeer) stopLiveTranscription(); else await startLiveTranscription(); return; }
+  if (provider === 'geminiLive') { if (geminiSocket) stopGeminiLiveTranscription(); else await startGeminiLiveTranscription(); return; }
   if (recorder?.state === 'recording') { recorder.stop(); return; } busy = true; record.disabled = true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type)); recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); const chunks = [];

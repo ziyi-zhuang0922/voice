@@ -8,11 +8,11 @@ async function run(t, options) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 test('serves workspace and exposes missing configuration without leaking keys', async t => {
-  const base = await run(t, { apiKey: '', groqApiKey: '', elevenLabsApiKey: '', deepgramApiKey: '', openaiApiKey: '' });
+  const base = await run(t, { apiKey: '', groqApiKey: '', elevenLabsApiKey: '', deepgramApiKey: '', openaiApiKey: '', geminiApiKey: '' });
   const page = await fetch(base);
   assert.match(await page.text(), /Speak your mind/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { schemaVersion: 2, providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' }, openai: { ready: false, model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: false, model: 'gpt-4o-transcribe' }, openaiLive: { ready: false, model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: false, model: 'gpt-transcribe' } } });
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { schemaVersion: 3, providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' }, openai: { ready: false, model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: false, model: 'gpt-4o-transcribe' }, openaiLive: { ready: false, model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: false, model: 'gpt-transcribe' }, gemini: { ready: false, model: 'gemini-3.5-transcribe' }, geminiLive: { ready: false, model: 'gemini-3.5-transcribe-live' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
 });
 test('uploads recorded audio, selects Universal-2 and returns completed transcript', async t => {
@@ -108,6 +108,44 @@ test('creates a WebRTC transcription session for OpenAI gpt-live-transcribe', as
   assert.equal(response.headers.get('content-type'), 'application/sdp');
   assert.equal(await response.text(), 'answer-sdp');
 });
+test('uploads audio and transcribes it with Gemini 3.5 Transcribe', async t => {
+  let step = 0;
+  const upstream = async (url, options) => {
+    step += 1;
+    if (step === 1) {
+      assert.equal(url, 'https://generativelanguage.googleapis.com/upload/v1beta/files');
+      assert.equal(options.headers['x-goog-api-key'], 'gemini-key');
+      assert.equal(options.headers['x-goog-upload-header-content-type'], 'audio/webm');
+      assert.equal(options.headers['x-goog-upload-header-content-length'], '14');
+      return new Response('', { headers: { 'x-goog-upload-url': 'https://upload.example/session' } });
+    }
+    if (step === 2) {
+      assert.equal(url, 'https://upload.example/session');
+      assert.equal(options.headers['x-goog-upload-command'], 'upload, finalize');
+      assert.equal(options.body.toString(), 'recorded-audio');
+      return Response.json({ file: { uri: 'https://generativelanguage.googleapis.com/v1beta/files/audio-1' } });
+    }
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
+    assert.equal(options.headers['x-goog-api-key'], 'gemini-key');
+    assert.deepEqual(JSON.parse(options.body), { model: 'gemini-3.5-transcribe', input: [{ type: 'audio', uri: 'https://generativelanguage.googleapis.com/v1beta/files/audio-1', mime_type: 'audio/webm' }] });
+    return Response.json({ outputs: [{ type: 'text', text: 'Hello from Gemini.' }] });
+  };
+  const base = await run(t, { apiKey: '', geminiApiKey: 'gemini-key', upstream });
+  const response = await fetch(`${base}/api/transcripts/gemini`, { method: 'POST', headers: { 'content-type': 'audio/webm;codecs=opus' }, body: 'recorded-audio' });
+  assert.deepEqual(await response.json(), { text: 'Hello from Gemini.' });
+  assert.equal(step, 3);
+});
+test('creates a constrained Gemini live transcription token', async t => {
+  const upstream = async (url, options) => {
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/auth_tokens');
+    assert.equal(options.headers['x-goog-api-key'], 'gemini-key');
+    assert.deepEqual(JSON.parse(options.body), { uses: 1, liveConnectConstraints: { model: 'models/gemini-3.5-transcribe-live', config: { responseModalities: ['TEXT'], inputAudioTranscription: { languageCodes: [] } } } });
+    return Response.json({ name: 'ephemeral-gemini-token' });
+  };
+  const base = await run(t, { apiKey: '', geminiApiKey: 'gemini-key', upstream });
+  const response = await fetch(`${base}/api/transcripts/gemini/live/token`, { method: 'POST' });
+  assert.deepEqual(await response.json(), { token: 'ephemeral-gemini-token' });
+});
 test('rejects invalid recordings and cross-origin requests before calling provider', async t => {
   const base = await run(t, { apiKey: 'test-key', upstream: () => { throw new Error('must not call'); } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'invalid' })).status, 415);
@@ -147,6 +185,16 @@ test('OpenAI rejects missing keys and invalid audio before contacting the provid
   const configured = await run(t, { apiKey: '', openaiApiKey: 'test-key', upstream });
   assert.equal((await fetch(`${configured}/api/transcripts/openai`, { method: 'POST', body: 'invalid' })).status, 415);
   assert.equal((await fetch(`${configured}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: '' })).status, 400);
+});
+
+test('Gemini rejects missing keys before contacting the provider', async t => {
+  const upstream = () => { throw new Error('must not call'); };
+  const base = await run(t, { apiKey: '', geminiApiKey: '', upstream });
+  const recording = await fetch(`${base}/api/transcripts/gemini`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'audio' });
+  assert.equal(recording.status, 503);
+  assert.match((await recording.json()).error, /GEMINI_API_KEY/);
+  const live = await fetch(`${base}/api/transcripts/gemini/live/token`, { method: 'POST' });
+  assert.equal(live.status, 503);
 });
 
 test('OpenAI authentication and quota errors identify the provider', async t => {

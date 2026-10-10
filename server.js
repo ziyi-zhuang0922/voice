@@ -42,6 +42,7 @@ export function createServer({
   elevenLabsApiKey = process.env.ELEVENLABS_API_KEY,
   deepgramApiKey = process.env.DEEPGRAM_API_KEY,
   openaiApiKey = process.env.VOICE_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
+  geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
   basicAuthUser = process.env.APP_BASIC_AUTH_USER,
   basicAuthPassword = process.env.APP_BASIC_AUTH_PASSWORD,
   upstream = fetch,
@@ -102,6 +103,62 @@ export function createServer({
     if (!response.ok) await throwProviderError(response, 'OpenAI');
     return response.text();
   }
+  async function geminiTranscribe(audio, contentType) {
+    const mimeType = contentType.split(';', 1)[0].toLowerCase();
+    const start = await upstream('https://generativelanguage.googleapis.com/upload/v1beta/files', {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': geminiApiKey,
+        'x-goog-upload-protocol': 'resumable',
+        'x-goog-upload-command': 'start',
+        'x-goog-upload-header-content-length': String(audio.length),
+        'x-goog-upload-header-content-type': mimeType,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ file: { display_name: 'voice-recording' } }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!start.ok) await throwProviderError(start, 'Gemini');
+    const uploadUrl = start.headers.get('x-goog-upload-url');
+    if (!uploadUrl) throw new SpeechProviderError(502, 'Gemini', 'The upload service did not return an upload URL.');
+    const upload = await upstream(uploadUrl, {
+      method: 'POST',
+      headers: { 'content-length': String(audio.length), 'x-goog-upload-offset': '0', 'x-goog-upload-command': 'upload, finalize' },
+      body: audio,
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!upload.ok) await throwProviderError(upload, 'Gemini');
+    const uploaded = await upload.json();
+    if (!uploaded.file?.uri) throw new SpeechProviderError(502, 'Gemini', 'The uploaded audio URI is missing.');
+    const interaction = await upstream('https://generativelanguage.googleapis.com/v1beta/interactions', {
+      method: 'POST',
+      headers: { 'x-goog-api-key': geminiApiKey, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gemini-3.5-transcribe', input: [{ type: 'audio', uri: uploaded.file.uri, mime_type: mimeType }] }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!interaction.ok) await throwProviderError(interaction, 'Gemini');
+    const result = await interaction.json();
+    const outputText = result.output_text || result.outputText || result.interaction?.output_text || result.interaction?.outputText || result.outputs?.filter(output => output.type === 'text').map(output => output.text || '').join('') || '';
+    return { text: outputText };
+  }
+  async function createGeminiLiveToken() {
+    const response = await upstream('https://generativelanguage.googleapis.com/v1beta/auth_tokens', {
+      method: 'POST',
+      headers: { 'x-goog-api-key': geminiApiKey, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        uses: 1,
+        liveConnectConstraints: {
+          model: 'models/gemini-3.5-transcribe-live',
+          config: { responseModalities: ['TEXT'], inputAudioTranscription: { languageCodes: [] } },
+        },
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!response.ok) await throwProviderError(response, 'Gemini');
+    const token = await response.json();
+    if (!token.name) throw new SpeechProviderError(502, 'Gemini', 'The live service did not return a token.');
+    return token.name;
+  }
   return http.createServer(async (req, res) => {
     const send = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -110,7 +167,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { schemaVersion: 2, providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: Boolean(openaiApiKey), model: 'gpt-4o-transcribe' }, openaiLive: { ready: Boolean(openaiApiKey), model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: Boolean(openaiApiKey), model: 'gpt-transcribe' } } });
+        return send(200, { schemaVersion: 3, providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: Boolean(openaiApiKey), model: 'gpt-4o-transcribe' }, openaiLive: { ready: Boolean(openaiApiKey), model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: Boolean(openaiApiKey), model: 'gpt-transcribe' }, gemini: { ready: Boolean(geminiApiKey), model: 'gemini-3.5-transcribe' }, geminiLive: { ready: Boolean(geminiApiKey), model: 'gemini-3.5-transcribe-live' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
@@ -134,8 +191,12 @@ export function createServer({
           res.writeHead(200, { 'Content-Type': 'application/sdp', 'Cache-Control': 'no-store' });
           return res.end(answer);
         }
+        if (req.method === 'POST' && url.pathname === '/api/transcripts/gemini/live/token') {
+          if (!geminiApiKey) { req.resume(); return send(503, { error: 'Set GEMINI_API_KEY (or GOOGLE_API_KEY) on the server before transcribing.' }); }
+          return send(200, { token: await createGeminiLiveToken() });
+        }
         const openAIModel = OPENAI_TRANSCRIPTION_MODELS[url.pathname];
-        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : openAIModel ? { key: openaiApiKey, name: 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)', transcribe: (audio, contentType) => openAITranscribe(audio, contentType, openAIModel) } : null;
+        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : url.pathname === '/api/transcripts/gemini' ? { key: geminiApiKey, name: 'GEMINI_API_KEY (or GOOGLE_API_KEY)', transcribe: geminiTranscribe } : openAIModel ? { key: openaiApiKey, name: 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)', transcribe: (audio, contentType) => openAITranscribe(audio, contentType, openAIModel) } : null;
         if (req.method === 'POST' && directProvider) {
           if (!directProvider.key) { req.resume(); return send(503, { error: `Set ${directProvider.name} on the server before transcribing.` }); }
           if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }

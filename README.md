@@ -1,17 +1,17 @@
 # Voice workspace
 
-Minimal browser desktop workspace for turning speech into text with AssemblyAI Universal-2, Groq Whisper Large v3 Turbo, Groq Whisper Large v3, ElevenLabs Scribe v2, Deepgram Nova-3 (English single-language mode), or OpenAI gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-live-transcribe, and gpt-transcribe. Each model has its own tab and editable transcript. The live OpenAI model streams text while you speak; AssemblyAI is asynchronous after recording stops; the other providers return text from an uploaded recording.
+Minimal browser desktop workspace for turning speech into text with AssemblyAI, Groq, ElevenLabs, Deepgram, OpenAI, and Gemini transcription models. Each model has its own tab and editable transcript. OpenAI and Gemini live models stream text while you speak; AssemblyAI is asynchronous after recording stops; the other providers return text from an uploaded recording.
 
 ## Run
 
 Requires Node.js 22+; no third-party dependencies or install step.
 
 1. Clone the repository and enter it: `git clone https://github.com/ziyi-zhuang0922/voice.git && cd voice`.
-2. Copy the local configuration template: `cp .env.example .env`. Set the provider keys you need (`ASSEMBLYAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY`, or `OPENAI_API_KEY`) in `.env`; never commit this file. The start command enables Node's environment-proxy support, which is required in the cloud environment and harmless locally.
+2. Copy the local configuration template: `cp .env.example .env`. Set the provider keys you need (`ASSEMBLYAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`) in `.env`; never commit this file. The start command enables Node's environment-proxy support, which is required in the cloud environment and harmless locally.
 3. Run `npm start`. Local start uses Node watch mode, so pulling backend code automatically restarts the process. Use `npm run start:once` when watch mode is not wanted.
 4. Open `http://127.0.0.1:3000` in a supported desktop browser. Allow microphone permission, click the microphone to record, then click again to stop and transcribe. Recording stops automatically after five minutes.
 
-Browser microphone access requires localhost or HTTPS. The local MVP has no user accounts or persistence. Audio is sent to AssemblyAI; provider retention and billing apply. The server does not save recordings to disk.
+Browser microphone access requires localhost or HTTPS. The local MVP has no user accounts or persistence. Audio is sent to the selected provider; provider retention and billing apply. The server does not save recordings to disk.
 
 Outbound HTTPS access to `api.assemblyai.com` is required. Credentials stay on the server. Universal-2 is explicitly selected through `speech_models: ['universal-2']`; there is no model fallback.
 
@@ -40,3 +40,9 @@ Stop the previous process with Ctrl+C in its terminal first. Open `http://127.0.
 `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, and `gpt-transcribe` process the recording after you stop. `gpt-live-transcribe` uses a WebRTC realtime transcription session and displays partial text while you speak. The standard API key remains on the server. Ogg file recordings are converted to WAV in the browser for OpenAI compatibility.
 
 For Docker hosting, configure the API key in the hosting platform as well; the image does not include your local `.env`. The host must allow outbound HTTPS to `api.openai.com`.
+
+## Gemini transcription
+
+Set `GEMINI_API_KEY` in your existing `.env`; `GOOGLE_API_KEY` is also supported as a fallback. `gemini-3.5-transcribe` uploads the completed recording through Gemini's Files API and submits it to the Interactions API. `gemini-3.5-transcribe-live` converts microphone audio to 16 kHz PCM in the browser and streams it over a Gemini Live WebSocket.
+
+The permanent Gemini API key remains on the server. Live mode requests a constrained, single-use ephemeral token and sends only that temporary token to the browser. Check `/api/health` for `gemini.ready` and `geminiLive.ready`, then test both models with a short recording. For Docker hosting, configure `GEMINI_API_KEY` on the platform and allow outbound HTTPS and WebSocket access to `generativelanguage.googleapis.com`.
