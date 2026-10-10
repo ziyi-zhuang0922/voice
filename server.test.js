@@ -12,7 +12,7 @@ test('serves workspace and exposes missing configuration without leaking keys', 
   const page = await fetch(base);
   assert.match(await page.text(), /Speak your mind/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' }, openai: { ready: false, model: 'gpt-4o-mini-transcribe' } } });
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' }, openai: { ready: false, model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: false, model: 'gpt-4o-transcribe' }, openaiLive: { ready: false, model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: false, model: 'gpt-transcribe' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
 });
 test('uploads recorded audio, selects Universal-2 and returns completed transcript', async t => {
@@ -76,16 +76,37 @@ test('submits audio to Deepgram Nova-3 with English single-language mode', async
   const response = await fetch(`${base}/api/transcripts/deepgram`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
   assert.deepEqual(await response.json(), { text: 'Hello from Deepgram.' });
 });
-test('submits audio to OpenAI gpt-4o-mini-transcribe and returns text directly', async t => {
+test('submits file audio to every OpenAI file transcription model', async t => {
+  const expected = new Map([
+    ['/api/transcripts/openai', 'gpt-4o-mini-transcribe'],
+    ['/api/transcripts/openai/gpt-4o-transcribe', 'gpt-4o-transcribe'],
+    ['/api/transcripts/openai/gpt-transcribe', 'gpt-transcribe'],
+  ]);
   const upstream = async (url, options) => {
     assert.equal(url, 'https://api.openai.com/v1/audio/transcriptions');
     assert.equal(options.headers.authorization, 'Bearer openai-key');
-    assert.equal(await options.body.get('model'), 'gpt-4o-mini-transcribe');
+    assert.ok([...expected.values()].includes(await options.body.get('model')));
     return Response.json({ text: 'Hello from OpenAI.' });
   };
   const base = await run(t, { apiKey: '', groqApiKey: '', openaiApiKey: 'openai-key', upstream });
-  const response = await fetch(`${base}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
-  assert.deepEqual(await response.json(), { text: 'Hello from OpenAI.' });
+  for (const [path, model] of expected) {
+    const response = await fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'recorded-audio' });
+    assert.deepEqual(await response.json(), { text: 'Hello from OpenAI.' }, model);
+  }
+});
+test('creates a WebRTC transcription session for OpenAI gpt-live-transcribe', async t => {
+  const upstream = async (url, options) => {
+    assert.equal(url, 'https://api.openai.com/v1/realtime/calls');
+    assert.equal(options.headers.authorization, 'Bearer openai-key');
+    assert.equal(await options.body.get('sdp'), 'offer-sdp');
+    assert.deepEqual(JSON.parse(await options.body.get('session')), { type: 'transcription', audio: { input: { transcription: { model: 'gpt-live-transcribe' }, turn_detection: null } } });
+    return new Response('answer-sdp', { status: 200, headers: { 'content-type': 'application/sdp' } });
+  };
+  const base = await run(t, { apiKey: '', openaiApiKey: 'openai-key', upstream });
+  const response = await fetch(`${base}/api/transcripts/openai/live/session`, { method: 'POST', headers: { 'content-type': 'application/sdp' }, body: 'offer-sdp' });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/sdp');
+  assert.equal(await response.text(), 'answer-sdp');
 });
 test('rejects invalid recordings and cross-origin requests before calling provider', async t => {
   const base = await run(t, { apiKey: 'test-key', upstream: () => { throw new Error('must not call'); } });
@@ -122,6 +143,7 @@ test('OpenAI rejects missing keys and invalid audio before contacting the provid
   const response = await fetch(`${missing}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'audio' });
   assert.equal(response.status, 503);
   assert.match((await response.json()).error, /OPENAI_API_KEY/);
+  assert.equal((await fetch(`${missing}/api/transcripts/openai/live/session`, { method: 'POST', headers: { 'content-type': 'application/sdp' }, body: 'offer' })).status, 503);
   const configured = await run(t, { apiKey: '', openaiApiKey: 'test-key', upstream });
   assert.equal((await fetch(`${configured}/api/transcripts/openai`, { method: 'POST', body: 'invalid' })).status, 415);
   assert.equal((await fetch(`${configured}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: '' })).status, 400);

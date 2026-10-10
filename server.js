@@ -4,6 +4,11 @@ import { pathToFileURL } from 'node:url';
 
 const ASSEMBLY_API = 'https://api.assemblyai.com/v2';
 const GROQ_API = 'https://api.groq.com/openai/v1';
+const OPENAI_TRANSCRIPTION_MODELS = {
+  '/api/transcripts/openai': 'gpt-4o-mini-transcribe',
+  '/api/transcripts/openai/gpt-4o-transcribe': 'gpt-4o-transcribe',
+  '/api/transcripts/openai/gpt-transcribe': 'gpt-transcribe',
+};
 const MAX_BYTES = 25 * 1024 * 1024;
 class SpeechProviderError extends Error {
   constructor(status, provider, reason = '') {
@@ -77,14 +82,25 @@ export function createServer({
     if (!response.ok) await throwProviderError(response, 'Deepgram');
     return response.json();
   }
-  async function openAITranscribe(audio, contentType) {
+  async function openAITranscribe(audio, contentType, model) {
     const form = new FormData();
     const extension = contentType.includes('ogg') ? 'ogg' : contentType.includes('mp4') ? 'mp4' : contentType.includes('wav') ? 'wav' : 'webm';
     form.set('file', new Blob([audio], { type: contentType }), `recording.${extension}`);
-    form.set('model', 'gpt-4o-mini-transcribe');
+    form.set('model', model);
     const response = await upstream('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { authorization: `Bearer ${openaiApiKey}` }, body: form, signal: AbortSignal.timeout(60000) });
     if (!response.ok) await throwProviderError(response, 'OpenAI');
     return response.json();
+  }
+  async function createOpenAILiveSession(sdp) {
+    const form = new FormData();
+    form.set('sdp', sdp);
+    form.set('session', JSON.stringify({
+      type: 'transcription',
+      audio: { input: { transcription: { model: 'gpt-live-transcribe' }, turn_detection: null } },
+    }));
+    const response = await upstream('https://api.openai.com/v1/realtime/calls', { method: 'POST', headers: { authorization: `Bearer ${openaiApiKey}` }, body: form, signal: AbortSignal.timeout(60000) });
+    if (!response.ok) await throwProviderError(response, 'OpenAI');
+    return response.text();
   }
   return http.createServer(async (req, res) => {
     const send = (status, body) => {
@@ -94,7 +110,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' } } });
+        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: Boolean(openaiApiKey), model: 'gpt-4o-transcribe' }, openaiLive: { ready: Boolean(openaiApiKey), model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: Boolean(openaiApiKey), model: 'gpt-transcribe' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
@@ -108,7 +124,18 @@ export function createServer({
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           req.resume(); return send(403, { error: 'Cross-origin requests are not allowed.' });
         }
-        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : url.pathname === '/api/transcripts/openai' ? { key: openaiApiKey, name: 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)', transcribe: openAITranscribe } : null;
+        if (req.method === 'POST' && url.pathname === '/api/transcripts/openai/live/session') {
+          if (!openaiApiKey) { req.resume(); return send(503, { error: 'Set OPENAI_API_KEY (or VOICE_OPENAI_API_KEY) on the server before transcribing.' }); }
+          if (!/^application\/sdp(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'A WebRTC SDP offer is required.' }); }
+          const chunks = []; let size = 0;
+          for await (const chunk of req) { size += chunk.length; if (size > 256 * 1024) { send(413, { error: 'SDP offer is too large.' }); req.resume(); return; } chunks.push(chunk); }
+          if (!size) return send(400, { error: 'SDP offer is empty.' });
+          const answer = await createOpenAILiveSession(Buffer.concat(chunks).toString('utf8'));
+          res.writeHead(200, { 'Content-Type': 'application/sdp', 'Cache-Control': 'no-store' });
+          return res.end(answer);
+        }
+        const openAIModel = OPENAI_TRANSCRIPTION_MODELS[url.pathname];
+        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : openAIModel ? { key: openaiApiKey, name: 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)', transcribe: (audio, contentType) => openAITranscribe(audio, contentType, openAIModel) } : null;
         if (req.method === 'POST' && directProvider) {
           if (!directProvider.key) { req.resume(); return send(503, { error: `Set ${directProvider.name} on the server before transcribing.` }); }
           if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }

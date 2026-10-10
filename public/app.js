@@ -8,13 +8,19 @@ const model = document.querySelector('#model');
 const tabs = [...document.querySelectorAll('.tab')];
 const latencyList = document.querySelector('#latency-list');
 const latencyEmpty = document.querySelector('#latency-empty');
-const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' }, openai: { label: 'OPENAI · GPT-4O MINI TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai', name: 'gpt-4o-mini-transcribe' } };
+const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' }, openai: { label: 'OPENAI · GPT-4O MINI TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai', name: 'gpt-4o-mini-transcribe' }, openai4o: { label: 'OPENAI · GPT-4O TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-4o-transcribe', name: 'gpt-4o-transcribe' }, openaiLive: { label: 'OPENAI · GPT-LIVE-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-live-transcribe', name: 'gpt-live-transcribe' }, openaiTranscribe: { label: 'OPENAI · GPT-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-transcribe', name: 'gpt-transcribe' } };
 let provider = 'assemblyai', availability = {}, recorder, stream, interval, started, busy = false;
-const transcripts = new Map([['assemblyai', ''], ['groqTurbo', ''], ['groqLarge', ''], ['elevenLabs', ''], ['deepgram', ''], ['openai', '']]);
+let livePeer, liveChannel, liveTranscript = '', liveStoppedAt, liveTimeout;
+const transcripts = new Map(Object.keys(providerInfo).map(name => [name, '']));
 const latencyHistory = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function request(path, options) { const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.'); return data; }
-function release() { stream?.getTracks().forEach(track => track.stop()); clearInterval(interval); }
+function release() {
+  stream?.getTracks().forEach(track => track.stop());
+  clearInterval(interval); clearTimeout(liveTimeout);
+  liveChannel?.close(); livePeer?.close();
+  stream = undefined; liveChannel = undefined; livePeer = undefined;
+}
 async function convertToWav(blob) {
   if (blob.type.startsWith('audio/wav')) return blob;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -44,24 +50,76 @@ function recordLatency(target, stoppedAt) {
   latencyList.innerHTML = latencyHistory.map(({ target: itemProvider, milliseconds: itemMilliseconds }) => `<li class="latency-item"><span class="latency-meta">${providerInfo[itemProvider].label.split(' · ')[0]}<small>${providerInfo[itemProvider].name}</small></span><strong>${(itemMilliseconds / 1000).toFixed(2)}s</strong></li>`).join('');
 }
 function selectProvider(next) {
-  if (busy || recorder?.state === 'recording') return;
+  if (busy || recorder?.state === 'recording' || livePeer) return;
   provider = next; model.textContent = providerInfo[provider].label;
   tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
-  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider === 'openai' ? 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)' : 'ASSEMBLYAI_API_KEY';
+  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider.startsWith('openai') ? 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)' : 'ASSEMBLYAI_API_KEY';
   status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${keyName} on the server and restart.`;
+}
+function finishLiveTranscription(message, transcript = liveTranscript) {
+  const target = 'openaiLive';
+  if (transcript) { setTranscript(transcript, target); if (liveStoppedAt) recordLatency(target, liveStoppedAt); }
+  release(); busy = false; liveTranscript = ''; liveStoppedAt = undefined;
+  record.classList.remove('recording'); record.setAttribute('aria-label', 'Start recording');
+  record.disabled = !availability[provider]; prompt.textContent = 'Ready when you are'; status.textContent = message;
+}
+async function startLiveTranscription() {
+  busy = true; record.disabled = true; liveTranscript = ''; setTranscript('', 'openaiLive');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    livePeer = new RTCPeerConnection();
+    stream.getTracks().forEach(track => livePeer.addTrack(track, stream));
+    liveChannel = livePeer.createDataChannel('oai-events');
+    liveChannel.addEventListener('message', event => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'conversation.item.input_audio_transcription.delta') {
+        liveTranscript += data.delta || ''; setTranscript(liveTranscript, 'openaiLive');
+      } else if (data.type === 'conversation.item.input_audio_transcription.completed') {
+        finishLiveTranscription(data.transcript ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.', data.transcript || '');
+      } else if (data.type === 'error') {
+        finishLiveTranscription(data.error?.message || 'OpenAI live transcription failed. Please retry.');
+      }
+    });
+    const opened = new Promise((resolve, reject) => {
+      liveChannel.addEventListener('open', resolve, { once: true });
+      liveChannel.addEventListener('error', () => reject(new Error('Could not open the OpenAI live transcription channel.')), { once: true });
+    });
+    const offer = await livePeer.createOffer(); await livePeer.setLocalDescription(offer);
+    const response = await fetch('/api/transcripts/openai/live/session', { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: offer.sdp, signal: AbortSignal.timeout(90000) });
+    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'Could not start OpenAI live transcription.'); }
+    await livePeer.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+    await Promise.race([opened, delay(15000).then(() => { throw new Error('OpenAI live transcription connection timed out.'); })]);
+    started = Date.now(); timer.textContent = '00:00';
+    interval = setInterval(() => { const seconds = Math.floor((Date.now() - started) / 1000); timer.textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; if (seconds >= 300 && livePeer) stopLiveTranscription(); }, 250);
+    record.classList.add('recording'); record.setAttribute('aria-label', 'Stop recording');
+    prompt.textContent = 'Listening to you'; status.textContent = 'Live speech-to-text is active. Click the microphone to finish.';
+  } catch (error) {
+    release(); status.textContent = error.name === 'NotAllowedError' ? 'Microphone access denied. Allow access in browser settings and retry.' : error.message;
+  } finally { busy = false; record.disabled = !availability[provider]; }
+}
+function stopLiveTranscription() {
+  if (!livePeer || liveChannel?.readyState !== 'open') return;
+  busy = true; liveStoppedAt = performance.now();
+  liveChannel.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+  stream?.getTracks().forEach(track => track.stop()); clearInterval(interval);
+  record.classList.remove('recording'); record.disabled = true; record.setAttribute('aria-label', 'Start recording');
+  prompt.textContent = 'Transcribing your recording'; status.textContent = 'Finalizing the live transcript…';
+  liveTimeout = setTimeout(() => finishLiveTranscription('OpenAI live transcription timed out. Please retry.'), 90000);
 }
 async function transcribe(blob, stoppedAt, target = provider) {
   busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[target].upload;
   try {
-    if (target !== 'assemblyai') { let audio = blob; if (target === 'elevenLabs' || (target === 'openai' && blob.type.startsWith('audio/ogg'))) { status.textContent = 'Preparing a compatible WAV…'; audio = await convertToWav(blob); } const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': audio.type }, body: audio }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
+    if (target !== 'assemblyai') { let audio = blob; if (target === 'elevenLabs' || (target.startsWith('openai') && blob.type.startsWith('audio/ogg'))) { status.textContent = 'Preparing a compatible WAV…'; audio = await convertToWav(blob); } const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': audio.type }, body: audio }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
     const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); const deadline = Date.now() + 10 * 60 * 1000;
     while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
     throw new Error('Transcription timed out. Please try again later.');
   } catch (error) { status.textContent = error.message; } finally { busy = false; record.disabled = !availability[provider]; prompt.textContent = 'Ready when you are'; }
 }
 record.addEventListener('click', async () => {
-  if (busy) return; if (recorder?.state === 'recording') { recorder.stop(); return; } busy = true; record.disabled = true;
+  if (busy) return;
+  if (provider === 'openaiLive') { if (livePeer) stopLiveTranscription(); else await startLiveTranscription(); return; }
+  if (recorder?.state === 'recording') { recorder.stop(); return; } busy = true; record.disabled = true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type)); recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); const chunks = [];
     recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); }; recorder.onerror = () => { release(); status.textContent = 'Recording failed. Please retry.'; };

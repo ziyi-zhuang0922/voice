@@ -1,6 +1,6 @@
 # Voice workspace
 
-Minimal browser desktop workspace for recording audio and transcribing it with AssemblyAI Universal-2, Groq Whisper Large v3 Turbo, Groq Whisper Large v3, ElevenLabs Scribe v2, Deepgram Nova-3 (English single-language mode), or OpenAI gpt-4o-mini-transcribe. Each model has its own tab and editable transcript. AssemblyAI is asynchronous after recording stops; the other providers return the transcription in the same request.
+Minimal browser desktop workspace for turning speech into text with AssemblyAI Universal-2, Groq Whisper Large v3 Turbo, Groq Whisper Large v3, ElevenLabs Scribe v2, Deepgram Nova-3 (English single-language mode), or OpenAI gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-live-transcribe, and gpt-transcribe. Each model has its own tab and editable transcript. The live OpenAI model streams text while you speak; AssemblyAI is asynchronous after recording stops; the other providers return text from an uploaded recording.
 
 ## Run
 
@@ -35,6 +35,8 @@ git pull
 PORT=3009 npm start
 ```
 
-Stop the previous process with Ctrl+C in its terminal first. Open `http://127.0.0.1:3009` and select **OpenAI → gpt-4o-mini-transcribe**. Check `http://127.0.0.1:3009/api/health`: `providers.openai.ready` means a key was loaded, not that OpenAI has accepted it. Record a short phrase to verify account access and transcription. Keys are sent only from the server to `https://api.openai.com/v1/audio/transcriptions`. Ogg recordings are converted to WAV in the browser for OpenAI compatibility.
+Stop the previous process with Ctrl+C in its terminal first. Open `http://127.0.0.1:3009` and select one of the four OpenAI speech-to-text models. Check `http://127.0.0.1:3009/api/health`: the OpenAI `ready` fields mean a key was loaded, not that OpenAI has accepted it. Record a short phrase with each model to verify account access and model availability.
+
+`gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, and `gpt-transcribe` process the recording after you stop. `gpt-live-transcribe` uses a WebRTC realtime transcription session and displays partial text while you speak. The standard API key remains on the server. Ogg file recordings are converted to WAV in the browser for OpenAI compatibility.
 
 For Docker hosting, configure the API key in the hosting platform as well; the image does not include your local `.env`. The host must allow outbound HTTPS to `api.openai.com`.
