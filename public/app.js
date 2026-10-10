@@ -8,8 +8,9 @@ const model = document.querySelector('#model');
 const tabs = [...document.querySelectorAll('.tab')];
 const latencyList = document.querySelector('#latency-list');
 const latencyEmpty = document.querySelector('#latency-empty');
+const REQUIRED_HEALTH_SCHEMA_VERSION = 2;
 const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' }, openai: { label: 'OPENAI · GPT-4O MINI TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai', name: 'gpt-4o-mini-transcribe' }, openai4o: { label: 'OPENAI · GPT-4O TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-4o-transcribe', name: 'gpt-4o-transcribe' }, openaiLive: { label: 'OPENAI · GPT-LIVE-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-live-transcribe', name: 'gpt-live-transcribe' }, openaiTranscribe: { label: 'OPENAI · GPT-TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai/gpt-transcribe', name: 'gpt-transcribe' } };
-let provider = 'assemblyai', availability = {}, recorder, stream, interval, started, busy = false;
+let provider = 'assemblyai', availability = {}, serverSchemaCurrent = true, recorder, stream, interval, started, busy = false;
 let livePeer, liveChannel, liveTranscript = '', liveStoppedAt, liveTimeout;
 const transcripts = new Map(Object.keys(providerInfo).map(name => [name, '']));
 const latencyHistory = [];
@@ -54,6 +55,7 @@ function selectProvider(next) {
   provider = next; model.textContent = providerInfo[provider].label;
   tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
+  if (!serverSchemaCurrent || !(provider in availability)) { record.disabled = true; status.textContent = 'Server update detected. Stop the old process and restart npm start.'; return; }
   const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider.startsWith('openai') ? 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)' : 'ASSEMBLYAI_API_KEY';
   status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${keyName} on the server and restart.`;
 }
@@ -132,4 +134,4 @@ tabs.forEach(tab => tab.addEventListener('click', () => selectProvider(tab.datas
 text.addEventListener('input', () => { transcripts.set(provider, text.value); copy.disabled = !text.value.trim(); });
 copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text.value); status.textContent = 'Transcript copied.'; } catch { status.textContent = 'Copy unavailable. Select the transcript and copy it manually.'; } });
 window.addEventListener('pagehide', release);
-try { const health = await request('/api/health'); availability = Object.fromEntries(Object.entries(health.providers).map(([name, value]) => [name, value.ready])); if (!navigator.mediaDevices || !window.MediaRecorder) status.textContent = 'Recording requires a supported browser on localhost or HTTPS.'; else selectProvider(provider); } catch { status.textContent = 'Could not connect to the server. Refresh to retry.'; }
+try { const health = await request('/api/health'); serverSchemaCurrent = health.schemaVersion === REQUIRED_HEALTH_SCHEMA_VERSION; availability = Object.fromEntries(Object.entries(health.providers).map(([name, value]) => [name, value.ready])); if (!navigator.mediaDevices || !window.MediaRecorder) status.textContent = 'Recording requires a supported browser on localhost or HTTPS.'; else selectProvider(provider); } catch { status.textContent = 'Could not connect to the server. Refresh to retry.'; }

@@ -12,7 +12,7 @@ test('serves workspace and exposes missing configuration without leaking keys', 
   const page = await fetch(base);
   assert.match(await page.text(), /Speak your mind/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' }, openai: { ready: false, model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: false, model: 'gpt-4o-transcribe' }, openaiLive: { ready: false, model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: false, model: 'gpt-transcribe' } } });
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { schemaVersion: 2, providers: { assemblyai: { ready: false, model: 'universal-2' }, groqTurbo: { ready: false, model: 'whisper-large-v3-turbo' }, groqLarge: { ready: false, model: 'whisper-large-v3' }, elevenLabs: { ready: false, model: 'scribe_v2' }, deepgram: { ready: false, model: 'nova-3', language: 'en' }, openai: { ready: false, model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: false, model: 'gpt-4o-transcribe' }, openaiLive: { ready: false, model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: false, model: 'gpt-transcribe' } } });
   assert.equal((await fetch(`${base}/api/transcripts`, { method: 'POST', body: 'audio' })).status, 503);
 });
 test('uploads recorded audio, selects Universal-2 and returns completed transcript', async t => {

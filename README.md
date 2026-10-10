@@ -8,7 +8,7 @@ Requires Node.js 22+; no third-party dependencies or install step.
 
 1. Clone the repository and enter it: `git clone https://github.com/ziyi-zhuang0922/voice.git && cd voice`.
 2. Copy the local configuration template: `cp .env.example .env`. Set the provider keys you need (`ASSEMBLYAI_API_KEY`, `GROQ_API_KEY`, `ELEVENLABS_API_KEY`, `DEEPGRAM_API_KEY`, or `OPENAI_API_KEY`) in `.env`; never commit this file. The start command enables Node's environment-proxy support, which is required in the cloud environment and harmless locally.
-3. Run `npm start`.
+3. Run `npm start`. Local start uses Node watch mode, so pulling backend code automatically restarts the process. Use `npm run start:once` when watch mode is not wanted.
 4. Open `http://127.0.0.1:3000` in a supported desktop browser. Allow microphone permission, click the microphone to record, then click again to stop and transcribe. Recording stops automatically after five minutes.
 
 Browser microphone access requires localhost or HTTPS. The local MVP has no user accounts or persistence. Audio is sent to AssemblyAI; provider retention and billing apply. The server does not save recordings to disk.

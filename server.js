@@ -110,7 +110,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: Boolean(openaiApiKey), model: 'gpt-4o-transcribe' }, openaiLive: { ready: Boolean(openaiApiKey), model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: Boolean(openaiApiKey), model: 'gpt-transcribe' } } });
+        return send(200, { schemaVersion: 2, providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' }, openai4o: { ready: Boolean(openaiApiKey), model: 'gpt-4o-transcribe' }, openaiLive: { ready: Boolean(openaiApiKey), model: 'gpt-live-transcribe' }, openaiTranscribe: { ready: Boolean(openaiApiKey), model: 'gpt-transcribe' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
