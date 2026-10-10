@@ -8,9 +8,9 @@ const model = document.querySelector('#model');
 const tabs = [...document.querySelectorAll('.tab')];
 const latencyList = document.querySelector('#latency-list');
 const latencyEmpty = document.querySelector('#latency-empty');
-const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' } };
+const providerInfo = { assemblyai: { label: 'ASSEMBLYAI · UNIVERSAL-2', upload: 'Uploading securely to AssemblyAI…', name: 'Universal-2' }, groqTurbo: { label: 'GROQ · WHISPER LARGE V3 TURBO', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq', name: 'Whisper Large v3 Turbo' }, groqLarge: { label: 'GROQ · WHISPER LARGE V3', upload: 'Uploading securely to Groq…', endpoint: '/api/transcripts/groq/large-v3', name: 'Whisper Large v3' }, elevenLabs: { label: 'ELEVENLABS · SCRIBE V2', upload: 'Uploading securely to ElevenLabs…', endpoint: '/api/transcripts/elevenlabs', name: 'Scribe v2' }, deepgram: { label: 'DEEPGRAM · NOVA-3 · ENGLISH', upload: 'Uploading securely to Deepgram…', endpoint: '/api/transcripts/deepgram', name: 'Nova-3 · English' }, openai: { label: 'OPENAI · GPT-4O MINI TRANSCRIBE', upload: 'Uploading securely to OpenAI…', endpoint: '/api/transcripts/openai', name: 'gpt-4o-mini-transcribe' } };
 let provider = 'assemblyai', availability = {}, recorder, stream, interval, started, busy = false;
-const transcripts = new Map([['assemblyai', ''], ['groqTurbo', ''], ['groqLarge', ''], ['elevenLabs', ''], ['deepgram', '']]);
+const transcripts = new Map([['assemblyai', ''], ['groqTurbo', ''], ['groqLarge', ''], ['elevenLabs', ''], ['deepgram', ''], ['openai', '']]);
 const latencyHistory = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function request(path, options) { const response = await fetch(path, { ...options, signal: AbortSignal.timeout(90000) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Request failed. Please retry.'); return data; }
@@ -48,7 +48,7 @@ function selectProvider(next) {
   provider = next; model.textContent = providerInfo[provider].label;
   tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
-  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : 'ASSEMBLYAI_API_KEY';
+  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider === 'openai' ? 'VOICE_OPENAI_API_KEY' : 'ASSEMBLYAI_API_KEY';
   status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${keyName} on the server and restart.`;
 }
 async function transcribe(blob, stoppedAt, target = provider) {

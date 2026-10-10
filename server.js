@@ -36,6 +36,7 @@ export function createServer({
   groqApiKey = process.env.GROQ_API_KEY,
   elevenLabsApiKey = process.env.ELEVENLABS_API_KEY,
   deepgramApiKey = process.env.DEEPGRAM_API_KEY,
+  openaiApiKey = process.env.VOICE_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
   basicAuthUser = process.env.APP_BASIC_AUTH_USER,
   basicAuthPassword = process.env.APP_BASIC_AUTH_PASSWORD,
   upstream = fetch,
@@ -76,6 +77,15 @@ export function createServer({
     if (!response.ok) await throwProviderError(response, 'Deepgram');
     return response.json();
   }
+  async function openAITranscribe(audio, contentType) {
+    const form = new FormData();
+    const extension = contentType.includes('ogg') ? 'ogg' : contentType.includes('mp4') ? 'mp4' : contentType.includes('wav') ? 'wav' : 'webm';
+    form.set('file', new Blob([audio], { type: contentType }), `recording.${extension}`);
+    form.set('model', 'gpt-4o-mini-transcribe');
+    const response = await upstream('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { authorization: `Bearer ${openaiApiKey}` }, body: form, signal: AbortSignal.timeout(60000) });
+    if (!response.ok) await throwProviderError(response, 'OpenAI');
+    return response.json();
+  }
   return http.createServer(async (req, res) => {
     const send = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -84,7 +94,7 @@ export function createServer({
     const url = new URL(req.url, 'http://localhost');
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
-        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' } } });
+        return send(200, { providers: { assemblyai: { ready: Boolean(apiKey), model: 'universal-2' }, groqTurbo: { ready: Boolean(groqApiKey), model: 'whisper-large-v3-turbo' }, groqLarge: { ready: Boolean(groqApiKey), model: 'whisper-large-v3' }, elevenLabs: { ready: Boolean(elevenLabsApiKey), model: 'scribe_v2' }, deepgram: { ready: Boolean(deepgramApiKey), model: 'nova-3', language: 'en' }, openai: { ready: Boolean(openaiApiKey), model: 'gpt-4o-mini-transcribe' } } });
       }
       if (accessProtectionEnabled) {
         const expected = `Basic ${Buffer.from(`${basicAuthUser}:${basicAuthPassword}`).toString('base64')}`;
@@ -98,7 +108,7 @@ export function createServer({
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           req.resume(); return send(403, { error: 'Cross-origin requests are not allowed.' });
         }
-        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : null;
+        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : url.pathname === '/api/transcripts/openai' ? { key: openaiApiKey, name: 'VOICE_OPENAI_API_KEY', transcribe: openAITranscribe } : null;
         if (req.method === 'POST' && directProvider) {
           if (!directProvider.key) { req.resume(); return send(503, { error: `Set ${directProvider.name} on the server before transcribing.` }); }
           if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }
