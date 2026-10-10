@@ -18,7 +18,7 @@ function release() { stream?.getTracks().forEach(track => track.stop()); clearIn
 async function convertToWav(blob) {
   if (blob.type.startsWith('audio/wav')) return blob;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextClass) throw new Error('This browser cannot prepare audio for ElevenLabs. Try Chrome or Safari.');
+  if (!AudioContextClass) throw new Error('This browser cannot prepare compatible audio. Try Chrome or Safari.');
   const context = new AudioContextClass();
   try {
     const source = await blob.arrayBuffer();
@@ -48,13 +48,13 @@ function selectProvider(next) {
   provider = next; model.textContent = providerInfo[provider].label;
   tabs.forEach(tab => { const active = tab.dataset.provider === provider; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', active); });
   setTranscript(transcripts.get(provider)); record.disabled = !availability[provider];
-  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider === 'openai' ? 'VOICE_OPENAI_API_KEY' : 'ASSEMBLYAI_API_KEY';
+  const keyName = provider.startsWith('groq') ? 'GROQ_API_KEY' : provider === 'elevenLabs' ? 'ELEVENLABS_API_KEY' : provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : provider === 'openai' ? 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)' : 'ASSEMBLYAI_API_KEY';
   status.textContent = availability[provider] ? 'Click the microphone to start recording.' : `Setup needed: add ${keyName} on the server and restart.`;
 }
 async function transcribe(blob, stoppedAt, target = provider) {
   busy = true; record.disabled = true; prompt.textContent = 'Transcribing your recording'; status.textContent = providerInfo[target].upload;
   try {
-    if (target !== 'assemblyai') { let audio = blob; if (target === 'elevenLabs') { status.textContent = 'Preparing a compatible WAV for ElevenLabs…'; audio = await convertToWav(blob); } const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': audio.type }, body: audio }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
+    if (target !== 'assemblyai') { let audio = blob; if (target === 'elevenLabs' || (target === 'openai' && blob.type.startsWith('audio/ogg'))) { status.textContent = 'Preparing a compatible WAV…'; audio = await convertToWav(blob); } const result = await request(providerInfo[target].endpoint, { method: 'POST', headers: { 'Content-Type': audio.type }, body: audio }); setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; }
     const job = await request('/api/transcripts', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob }); const deadline = Date.now() + 10 * 60 * 1000;
     while (Date.now() < deadline) { const result = await request(`/api/transcripts/${job.id}`); if (result.status === 'error') throw new Error(result.error); if (result.status === 'completed') { setTranscript(result.text || '', target); if (result.text) recordLatency(target, stoppedAt); status.textContent = result.text ? 'Transcript ready. Edit or copy your text below.' : 'No speech detected. Try recording again.'; return; } status.textContent = 'Turning your speech into text…'; await delay(2000); }
     throw new Error('Transcription timed out. Please try again later.');

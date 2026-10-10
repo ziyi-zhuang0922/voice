@@ -115,3 +115,25 @@ test('protects the workspace when basic authentication is configured', async t =
 test('requires both basic authentication settings when protection is enabled', () => {
   assert.throws(() => createServer({ apiKey: 'test-key', basicAuthUser: 'tester' }), /Set both/);
 });
+
+test('OpenAI rejects missing keys and invalid audio before contacting the provider', async t => {
+  const upstream = () => { throw new Error('must not call'); };
+  const missing = await run(t, { apiKey: '', openaiApiKey: '', upstream });
+  const response = await fetch(`${missing}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'audio' });
+  assert.equal(response.status, 503);
+  assert.match((await response.json()).error, /OPENAI_API_KEY/);
+  const configured = await run(t, { apiKey: '', openaiApiKey: 'test-key', upstream });
+  assert.equal((await fetch(`${configured}/api/transcripts/openai`, { method: 'POST', body: 'invalid' })).status, 415);
+  assert.equal((await fetch(`${configured}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: '' })).status, 400);
+});
+
+test('OpenAI authentication and quota errors identify the provider', async t => {
+  for (const [status, message] of [[401, /OpenAI rejected the API key/], [429, /OpenAI account quota or rate limit/]]) {
+    const base = await run(t, { apiKey: '', openaiApiKey: 'private-key', upstream: async () => new Response('private-key', { status }) });
+    const response = await fetch(`${base}/api/transcripts/openai`, { method: 'POST', headers: { 'content-type': 'audio/webm' }, body: 'audio' });
+    assert.equal(response.status, 502);
+    const body = await response.text();
+    assert.match(body, message);
+    assert.doesNotMatch(body, /private-key/);
+  }
+});

@@ -108,7 +108,7 @@ export function createServer({
         if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
           req.resume(); return send(403, { error: 'Cross-origin requests are not allowed.' });
         }
-        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : url.pathname === '/api/transcripts/openai' ? { key: openaiApiKey, name: 'VOICE_OPENAI_API_KEY', transcribe: openAITranscribe } : null;
+        const directProvider = url.pathname === '/api/transcripts/elevenlabs' ? { key: elevenLabsApiKey, name: 'ELEVENLABS_API_KEY', transcribe: elevenLabsTranscribe } : url.pathname === '/api/transcripts/deepgram' ? { key: deepgramApiKey, name: 'DEEPGRAM_API_KEY', transcribe: deepgramTranscribe } : url.pathname === '/api/transcripts/openai' ? { key: openaiApiKey, name: 'OPENAI_API_KEY (or VOICE_OPENAI_API_KEY)', transcribe: openAITranscribe } : null;
         if (req.method === 'POST' && directProvider) {
           if (!directProvider.key) { req.resume(); return send(503, { error: `Set ${directProvider.name} on the server before transcribing.` }); }
           if (!/^audio\/(webm|ogg|mp4|wav)(;|$)/i.test(req.headers['content-type'] || '')) { req.resume(); return send(415, { error: 'Unsupported recording format.' }); }

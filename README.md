@@ -24,3 +24,17 @@ Check `/api/health` for configured status. A complete live check requires a real
 ## Deploy
 
 The project includes a Docker deployment definition. Deploy it through a platform that supplies HTTPS and set these secrets in that platform's environment settings: `ASSEMBLYAI_API_KEY`, `APP_BASIC_AUTH_USER`, and `APP_BASIC_AUTH_PASSWORD`. Keep the password long and unique. When both access-protection variables are set, the application requires HTTP Basic authentication for the workspace and transcription API; `/api/health` remains available for the platform health check.
+
+## OpenAI transcription
+
+Set `OPENAI_API_KEY` in your existing `.env` (do not overwrite it with the template). `VOICE_OPENAI_API_KEY` is also supported and takes precedence when both are set. Restart the running Node process after changing `.env` or pulling code:
+
+```sh
+cd ~/voice
+git pull
+PORT=3009 npm start
+```
+
+Stop the previous process with Ctrl+C in its terminal first. Open `http://127.0.0.1:3009` and select **OpenAI → gpt-4o-mini-transcribe**. Check `http://127.0.0.1:3009/api/health`: `providers.openai.ready` means a key was loaded, not that OpenAI has accepted it. Record a short phrase to verify account access and transcription. Keys are sent only from the server to `https://api.openai.com/v1/audio/transcriptions`. Ogg recordings are converted to WAV in the browser for OpenAI compatibility.
+
+For Docker hosting, configure the API key in the hosting platform as well; the image does not include your local `.env`. The host must allow outbound HTTPS to `api.openai.com`.
